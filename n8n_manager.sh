@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -euo pipefail
+IFS=$'\n\t'
 #############################################################################################
 # N8N Installation & Management Script
 # Author: TheNguyen
@@ -26,6 +27,16 @@
 #   ./n8n_manager.sh -u -f <DOMAIN>                 # Force upgrade n8n
 #   ./n8n_manager.sh -c                             # Cleanup n8n containers and volumes
 #############################################################################################
+trap 'on_interrupt' INT
+
+on_interrupt() {
+    log ERROR "Interrupted by user. Stopping containers and exiting..."
+    if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
+        cd "$N8N_DIR"
+        docker compose down || true
+    fi
+    exit 1
+}
 
 # Global variables
 LOG_LEVEL="INFO"
@@ -97,7 +108,7 @@ get_user_email() {
 }
 
 generate_strong_password() {
-    openssl rand -hex 16
+    openssl rand -base64 16
 }
 
 prepare_compose_file() {
@@ -106,6 +117,7 @@ prepare_compose_file() {
     local compose_file="$N8N_DIR/docker-compose.yml"
     local env_template="$PWD/.env"
     local env_file="$N8N_DIR/.env"
+    local password="$(openssl rand -base64 16)"
 
     if [[ ! -f "$compose_template" ]]; then
         log ERROR "docker-compose.yml not found at $compose_template"
@@ -116,10 +128,8 @@ prepare_compose_file() {
         log ERROR ".env file not found at $env_template"
         exit 1 
     fi
-    cp $compose_template "$compose_file"
-    cp $env_template "$env_file"
-
-    local password="$(generate_strong_password)"
+    cp "$compose_template" "$compose_file"
+    cp "$env_template" "$env_file"
 
     log INFO "Updating .env file with provided domain, email, and generated password..."
 
