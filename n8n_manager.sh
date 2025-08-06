@@ -105,7 +105,7 @@ check_domain() {
 # Prompts the user to input a valid email address for SSL certificate generation
 get_user_email() {
     while true; do
-        read -p "Enter your email address (used for SSL cert): " SSL_EMAIL
+        read -e -p "Enter your email address (used for SSL cert): " SSL_EMAIL
         if [[ "$SSL_EMAIL" =~ ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
             export SSL_EMAIL
             break
@@ -133,8 +133,14 @@ prepare_compose_file() {
         log ERROR ".env file not found at $env_template"
         exit 1 
     fi
-    cp "$compose_template" "$compose_file"
-    cp "$env_template" "$env_file"
+
+    if [[ "$compose_template" != "$compose_file" ]]; then
+        cp "$compose_template" "$compose_file"
+    fi
+
+    if [[ "$env_template" != "$env_file" ]]; then
+        cp "$env_template" "$env_file"
+    fi
 
     log INFO "Updating .env file with provided domain, email..."
     # Use sed to replace variables
