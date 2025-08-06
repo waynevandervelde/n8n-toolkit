@@ -65,12 +65,13 @@ log() {
 
 # Displays script usage/help information when incorrect or no arguments are passed
 usage() {
-    echo "Usage: $0 [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL]"
+    echo "Usage: $0 [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h"
     echo "  $0 -i <DOMAIN>         Install n8n stack"
     echo "  $0 -u <DOMAIN> [-f]    Upgrade n8n stack (optionally force)"
     echo "  $0 -c                  Cleanup all containers, volumes, and network"
     echo "  $0 -d <TARGET_DIR>     Target install directory (default: /home/n8n)"
     echo "  $0 -l                  Set log level: DEBUG, INFO (default), WARN, ERROR"
+    echo "  $0 -h                  Show script usage"
     exit 1
 }
 
@@ -84,7 +85,7 @@ check_root() {
 
 # Validates that the provided domain points to the current server's public IP
 check_domain() {
-    local server_ip=$(curl -s https://api.ipify.org)
+    local server_ip=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo "Unavailable")
     local domain_ip=$(dig +short $DOMAIN)
     log INFO "Your server's public IP is: $server_ip"
     log INFO "Domain $DOMAIN currently resolves to: $domain_ip"
@@ -333,16 +334,20 @@ check_containers_healthy() {
 
 # Prints final status messages after install or upgrade with version and URL info
 print_summary_message() {
-    log INFO "═════════════════════════════════════════════════════════════"
+    echo "═════════════════════════════════════════════════════════════"
     if [[ "$INSTALL" == true ]]; then
-        log INFO "N8N has been successfully installed!"
+        echo "N8N has been successfully installed!"
     elif [[ "$UPGRADE" == true ]]; then
-        log INFO "N8N has been successfully upgraded!"
+        echo "N8N has been successfully upgraded!"
     fi
-    log INFO "Running N8N version: $(get_current_n8n_version)"
-    log INFO "Access it at: https://${DOMAIN}"
-    log INFO "Learn more: https://nguyenminhthe.com/n8n"
-    log INFO "═════════════════════════════════════════════════════════════"
+    echo "Domain:             https://${DOMAIN}"
+    echo "Installed Version:  $(get_current_n8n_version)"
+    echo "Install Timestamp:  $(date "+%Y-%m-%d %H:%M:%S")"
+    echo "Installed By:       ${USER:-unknown}"
+    echo "Target Directory:   $N8N_DIR"
+    echo "SSL Email:          ${SSL_EMAIL:-N/A}"
+    echo "Check the execution log: ${LOG_FILE}"
+    echo "═════════════════════════════════════════════════════════════"
 }
 
 # Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
@@ -427,9 +432,9 @@ upgrade_n8n() {
     log INFO "Current version: $current_version"
     log INFO "Latest version:  $latest_version"
 
-    if [[ "$current_version" == "$latest_version" && "$FORCE_UPGRADE" != true ]]; then
-        log INFO "You are already running the latest n8n version ($latest_version). Use -f to force upgrade."
-        return 0
+    if [[ "$(echo -e "$latest_version\n$current_version" | sort -V | head -n1)" == "$latest_version" && "$FORCE_UPGRADE" != true ]]; then
+    log INFO "You are already running the latest version ($latest_version). Use -f to force upgrade."
+    exit 0
     fi
 
     log INFO "Pulling latest image..."
@@ -476,6 +481,10 @@ cleanup_n8n() {
 }
 
 #  Main
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+fi
+
 while getopts ":i:u:fc:d:l:" opt; do
   case $opt in
     i)
@@ -498,10 +507,6 @@ while getopts ":i:u:fc:d:l:" opt; do
     l)
       LOG_LEVEL="$OPTARG"
       ;;
-    \?)
-      echo "Invalid option: -$OPTARG"
-      usage
-      ;;
     :)
       echo "Option -$OPTARG requires an argument."
       usage
@@ -516,6 +521,9 @@ N8N_DIR="${TARGET_DIR:-/home/n8n}"
 log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$N8N_DIR"
 sudo chown -R $USER:$USER "$N8N_DIR"
+LOG_FILE="$N8N_DIR/n8n_install.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+log INFO "Logging to $LOG_FILE"
 
 if [[ $INSTALL == true ]]; then
     install_n8n
