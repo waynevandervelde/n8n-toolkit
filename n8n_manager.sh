@@ -155,6 +155,9 @@ prepare_compose_file() {
         new_password="$(openssl rand -base64 16)"
         log INFO "Updating .env with new strong password..."
         sed -i "s|^STRONG_PASSWORD=.*|STRONG_PASSWORD=${new_password}|" "$env_file"
+    else
+    log DEBUG "Existing STRONG_PASSWORD found. Not modifying it."
+    log DEBUG "STRONG_PASSWORD=$password_line"
     fi
 }
 
@@ -540,9 +543,9 @@ done
 check_root
 N8N_DIR="${TARGET_DIR:-$PWD}"
 log INFO "Working on directory: $N8N_DIR"
-mkdir -p "$N8N_DIR"
+mkdir -p "$N8N_DIR/logs"
 sudo chown -R $USER:$USER "$N8N_DIR"
-LOG_FILE="$N8N_DIR/n8n_manager.log"
+LOG_FILE="$N8N_DIR/logs/n8n_manager.log"
 exec > >(tee "$LOG_FILE") 2>&1
 log INFO "Logging to $LOG_FILE"
 
@@ -555,4 +558,3 @@ elif [[ $CLEANUP == true ]]; then
 else
     usage
 fi
-
