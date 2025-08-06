@@ -167,6 +167,10 @@ backup_n8n() {
         log INFO "Old cloud backups cleaned up."
     fi
 
+    log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
+    find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+    log INFO "Local cleanup complete."
+
     if [[ "$SEND_EMAIL" == "true" && -n "$EMAIL_TO" && -n "$MAILGUN_API_KEY" ]]; then
         curl -s --user "api:$MAILGUN_API_KEY" \
             https://api.mailgun.net/v3/$MAILGUN_DOMAIN/messages \
