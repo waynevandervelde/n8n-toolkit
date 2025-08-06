@@ -29,6 +29,7 @@ IFS=$'\n\t'
 #############################################################################################
 trap 'on_interrupt' INT
 
+# Catches Ctrl+C (SIGINT) and gracefully shuts down running containers before exiting
 on_interrupt() {
     log ERROR "Interrupted by user. Stopping containers and exiting..."
     if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
@@ -43,7 +44,7 @@ LOG_LEVEL="INFO"
 FORCE_UPGRADE=false
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
 
-# Logging functions
+# Handles conditional logging based on the defined log level (DEBUG, INFO, WARN, ERROR)
 log() {
     local level="$1"
     shift
@@ -62,7 +63,7 @@ log() {
     fi
 }
 
-# Usage
+# Displays script usage/help information when incorrect or no arguments are passed
 usage() {
     echo "Usage: $0 [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL]"
     echo "  $0 -i <DOMAIN>         Install n8n stack"
@@ -73,6 +74,7 @@ usage() {
     exit 1
 }
 
+# Ensures the script is run as root user; exits if not
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         log ERROR "This script must be run as root."
@@ -80,7 +82,7 @@ check_root() {
     fi
 }
 
-# Check if the domain is pointing to this server
+# Validates that the provided domain points to the current server's public IP
 check_domain() {
     local server_ip=$(curl -s https://api.ipify.org)
     local domain_ip=$(dig +short $DOMAIN)
@@ -95,6 +97,7 @@ check_domain() {
     fi
 }
 
+# Prompts the user to input a valid email address for SSL certificate generation
 get_user_email() {
     while true; do
         read -p "Enter your email address (used for SSL cert): " SSL_EMAIL
@@ -107,10 +110,7 @@ get_user_email() {
     done
 }
 
-generate_strong_password() {
-    openssl rand -base64 16
-}
-
+# Prepares docker-compose.yml and .env by copying templates and injecting variables
 prepare_compose_file() {
     # Copy docker-compose and .env template to target dir
     local compose_template="$PWD/docker-compose.yml"
@@ -139,6 +139,7 @@ prepare_compose_file() {
     sed -i "s|^STRONG_PASSWORD=.*|STRONG_PASSWORD=${password}|" "$env_file"
 }
 
+# Ensures all required environment variables in the Docker Compose file are defined
 strict_env_check() {
     local compose_file="$1"
     local env_file="$2"
@@ -177,6 +178,7 @@ strict_env_check() {
     return 0
 }
 
+# Validates the syntax of the docker-compose.yml and ensures all .env variables are present
 validate_compose_and_env() {
     local compose_file="$N8N_DIR/docker-compose.yml"
     local env_file="$N8N_DIR/.env"
@@ -214,9 +216,7 @@ validate_compose_and_env() {
     log INFO "docker-compose.yml and .env validated successfully."
 }
 
-
-
-# Install Docker and Docker Compose
+# Installs Docker, Docker Compose, and related system dependencies
 install_docker() {
     log INFO "Removing any old Docker versions..."
     apt-get remove -y docker docker-engine docker.io containerd runc
@@ -248,10 +248,12 @@ install_docker() {
     log INFO "Docker and Docker Compose installed successfully."
 }
 
+# Returns the currently running version of n8n from the Docker container
 get_current_n8n_version() {
     docker exec n8n n8n --version 2>/dev/null
 }
 
+# Fetches the latest stable n8n version tag from Docker Hub
 get_latest_n8n_version() {
     curl -s https://hub.docker.com/v2/repositories/n8nio/n8n/tags \
     | jq -r '.results[].name' \
@@ -259,6 +261,7 @@ get_latest_n8n_version() {
     | sort -Vr | head -n 1
 }
 
+# Creates all Docker volumes required by the n8n stack if they don't already exist
 create_volumes() {
     log INFO "Creating Docker volumes..."
     for vol in "${VOLUMES[@]}"; do
@@ -273,12 +276,14 @@ create_volumes() {
     docker volume ls
 }
 
+# Starts the n8n stack using Docker Compose
 run_docker_compose() {
     log INFO "Starting Docker Compose..."
     cd "$N8N_DIR"
     docker compose up -d
 }
 
+# Waits for all containers to reach a healthy state within a timeout window
 check_containers_healthy() {
     timeout=180
     interval=10
@@ -326,6 +331,7 @@ check_containers_healthy() {
     return 1
 }
 
+# Prints final status messages after install or upgrade with version and URL info
 print_summary_message() {
     log INFO "═════════════════════════════════════════════════════════════"
     if [[ "$INSTALL" == true ]]; then
@@ -339,6 +345,7 @@ print_summary_message() {
     log INFO "═════════════════════════════════════════════════════════════"
 }
 
+# Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
 verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
 
@@ -383,6 +390,7 @@ verify_traefik_certificate() {
     return 0
 }
 
+# Combines container health and optional certificate checks to confirm stack is operational
 check_services_up_running() {
     if ! check_containers_healthy; then
         log ERROR "Some containers are not running or unhealthy. Please check the logs above."
@@ -396,24 +404,20 @@ check_services_up_running() {
     print_summary_message
 }
 
-# Install n8n stack
+# Orchestrates the full installation flow: validation, config setup, Docker install, service start
 install_n8n() {
     log INFO "Starting N8N installation for domain: $DOMAIN"
-    
     get_user_email
-
     check_domain
-
     prepare_compose_file
     validate_compose_and_env
-
     install_docker
-
     create_volumes
     run_docker_compose
     check_services_up_running
 }
 
+# Manages the upgrade flow: version check, image pull, re-deploy stack with latest image
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
     cd "$N8N_DIR"
@@ -440,7 +444,7 @@ upgrade_n8n() {
     check_services_up_running
 }
 
-# Cleanup n8n containers, volumes, images, and network
+# Stops the n8n stack and cleans up Docker containers, volumes, images, and networks
 cleanup_n8n() {
     log INFO "Stopping containers and removing containers, volumes, and orphan services..."
     docker compose down --remove-orphans
