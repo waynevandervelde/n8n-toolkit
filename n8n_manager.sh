@@ -367,7 +367,7 @@ print_summary_message() {
     echo "Installed By:       ${USER:-unknown}"
     echo "Target Directory:   $N8N_DIR"
     echo "SSL Email:          ${SSL_EMAIL:-N/A}"
-    echo "Check the execution log: ${LOG_FILE}"
+    echo "Execution log:      ${LOG_FILE}"
     echo "═════════════════════════════════════════════════════════════"
 }
 
@@ -423,10 +423,10 @@ check_services_up_running() {
         exit 1
     fi
 
-    # if ! verify_traefik_certificate; then
-    #     log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-    #     exit 1
-    # fi
+    if ! verify_traefik_certificate; then
+        log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
+        exit 1
+    fi
     print_summary_message
 }
 
