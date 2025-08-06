@@ -40,8 +40,12 @@ on_interrupt() {
 }
 
 # Global variables
-LOG_LEVEL="INFO"
+INSTALL=false
+UPGRADE=false
+CLEANUP=false
 FORCE_UPGRADE=false
+LOG_LEVEL="INFO"
+TARGET_DIR=""
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
 
 # Handles conditional logging based on the defined log level (DEBUG, INFO, WARN, ERROR)
@@ -113,7 +117,7 @@ get_user_email() {
 
 # Prepares docker-compose.yml and .env by copying templates and injecting variables
 prepare_compose_file() {
-    # Copy docker-compose and .env template to target dir
+    # Copy docker-compose and .env template to the target dir
     local compose_template="$PWD/docker-compose.yml"
     local compose_file="$N8N_DIR/docker-compose.yml"
     local env_template="$PWD/.env"
@@ -132,12 +136,20 @@ prepare_compose_file() {
     cp "$compose_template" "$compose_file"
     cp "$env_template" "$env_file"
 
-    log INFO "Updating .env file with provided domain, email, and generated password..."
-
+    log INFO "Updating .env file with provided domain, email..."
     # Use sed to replace variables
     sed -i "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" "$env_file"
     sed -i "s|^SSL_EMAIL=.*|SSL_EMAIL=${SSL_EMAIL}|" "$env_file"
-    sed -i "s|^STRONG_PASSWORD=.*|STRONG_PASSWORD=${password}|" "$env_file"
+
+    # Inside prepare_compose_file
+    local password_line
+    password_line=$(grep "^STRONG_PASSWORD=" "$env_file" | cut -d '=' -f2)
+    if [[ "$password_line" == "myStrongPassword123!@#" || -z "$password_line" ]]; then
+        local new_password
+        new_password="$(openssl rand -base64 16)"
+        log INFO "Updating .env with new strong password..."
+        sed -i "s|^STRONG_PASSWORD=.*|STRONG_PASSWORD=${new_password}|" "$env_file"
+    fi
 }
 
 # Ensures all required environment variables in the Docker Compose file are defined
@@ -378,7 +390,7 @@ verify_traefik_certificate() {
 
     cert_info=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -issuer -subject -dates)
     if [[ -z "$cert_info" ]]; then
-        log ERROR "Could not retrieve certificate details. Certificate might not be installed or SSL handshake failed."
+        log ERROR "Could not retrieve certificate details. The certificate might not be installed, or SSL handshake failed."
         return 1
     fi
 
@@ -422,7 +434,7 @@ install_n8n() {
     check_services_up_running
 }
 
-# Manages the upgrade flow: version check, image pull, re-deploy stack with latest image
+# Manages the upgrade flow: version check, image pull, and redeploy the stack with the latest image
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
     cd "$N8N_DIR"
@@ -485,7 +497,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
 fi
 
-while getopts ":i:u:fc:d:l:" opt; do
+while getopts ":i:u:fcd:l:" opt; do
   case $opt in
     i)
       DOMAIN="$OPTARG"
@@ -507,6 +519,10 @@ while getopts ":i:u:fc:d:l:" opt; do
     l)
       LOG_LEVEL="$OPTARG"
       ;;
+    \?)
+      echo "Invalid option: -$OPTARG"
+      usage
+      ;;
     :)
       echo "Option -$OPTARG requires an argument."
       usage
@@ -514,8 +530,7 @@ while getopts ":i:u:fc:d:l:" opt; do
   esac
 done
 
-# Main
-
+# Main execution
 check_root
 N8N_DIR="${TARGET_DIR:-/home/n8n}"
 log INFO "Working on directory: $N8N_DIR"
