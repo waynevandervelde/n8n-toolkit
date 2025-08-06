@@ -23,7 +23,7 @@ IFS=$'\n\t'
 # Usage:
 #   ./n8n_manager.sh -i <DOMAIN> [-l INFO|DEBUG]    # Install n8n with specified domain
 #   ./n8n_manager.sh -u <DOMAIN>                    # Upgrade n8n with specified domain
-#   ./n8n_manager.sh -d <TARGET_DIR>                # Target install directory (default: /home/n8n)
+#   ./n8n_manager.sh -d <TARGET_DIR>                # Target install directory (default: ${PWD})
 #   ./n8n_manager.sh -u -f <DOMAIN>                 # Force upgrade n8n
 #   ./n8n_manager.sh -c                             # Cleanup n8n containers and volumes
 #############################################################################################
@@ -73,7 +73,7 @@ usage() {
     echo "  $0 -i <DOMAIN>         Install n8n stack"
     echo "  $0 -u <DOMAIN> [-f]    Upgrade n8n stack (optionally force)"
     echo "  $0 -c                  Cleanup all containers, volumes, and network"
-    echo "  $0 -d <TARGET_DIR>     Target install directory (default: /home/n8n)"
+    echo "  $0 -d <TARGET_DIR>     Target install directory (default: $PWD)"
     echo "  $0 -l                  Set log level: DEBUG, INFO (default), WARN, ERROR"
     echo "  $0 -h                  Show script usage"
     exit 1
@@ -305,7 +305,7 @@ check_containers_healthy() {
     log INFO "Checking container status..."
 
     while [ $elapsed -lt $timeout ]; do
-        log INFO "nStatus check at $(date +"%H:%M:%S")..."
+        log INFO "Status check at $(date +"%H:%M:%S")..."
         all_ok=true
         docker compose ps
         containers=$(docker ps -q)
@@ -336,7 +336,7 @@ check_containers_healthy() {
             echo -n "."
             sleep 1
         done
-
+        echo ""
         elapsed=$((elapsed + interval))
     done
 
@@ -532,12 +532,12 @@ done
 
 # Main execution
 check_root
-N8N_DIR="${TARGET_DIR:-/home/n8n}"
+N8N_DIR="${TARGET_DIR:-$PWD}"
 log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$N8N_DIR"
 sudo chown -R $USER:$USER "$N8N_DIR"
-LOG_FILE="$N8N_DIR/n8n_install.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+LOG_FILE="$N8N_DIR/n8n_manager.log"
+exec > >(tee "$LOG_FILE") 2>&1
 log INFO "Logging to $LOG_FILE"
 
 if [[ $INSTALL == true ]]; then
