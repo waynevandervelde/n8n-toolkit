@@ -416,6 +416,71 @@ verify_traefik_certificate() {
     return 0
 }
 
+# Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
+verify_traefik_certificate() {
+    local domain_url="https://${DOMAIN}"
+    local MAX_RETRIES=3
+    local SLEEP_INTERVAL=10
+
+    log INFO "Checking DNS resolution for domain..."
+    domain_ip=$(dig +short "$DOMAIN")
+    if [[ -z "$domain_ip" ]]; then
+        log ERROR "DNS lookup failed for $DOMAIN. Ensure it points to your server's IP."
+        return 1
+    fi
+    log INFO "Domain $DOMAIN resolves to IP: $domain_ip"
+
+    log INFO "Checking if your domain is reachable via HTTPS..."
+    local success=false
+    for ((i=1; i<=MAX_RETRIES; i++)); do
+        response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$domain_url")
+
+        if [[ "$response" == "200" || "$response" == "301" || "$response" == "302" ]]; then
+            log INFO "Domain is reachable with HTTPS (HTTP $response)"
+            success=true
+            break
+        elif [[ "$response" == "000" ]]; then
+            log WARN "No HTTPS response received (attempt $i/$MAX_RETRIES). Traefik or certs might not be ready."
+        else
+            log WARN "Domain not reachable (HTTP $response) (attempt $i/$MAX_RETRIES)."
+        fi
+
+        if [[ $i -lt $MAX_RETRIES ]]; then
+            log INFO "Retrying in ${SLEEP_INTERVAL}s..."
+            sleep $SLEEP_INTERVAL
+        fi
+    done
+
+    if [[ "$success" != true ]]; then
+        log ERROR "Domain is not reachable via HTTPS after $MAX_RETRIES attempts."
+        return 1
+    fi
+
+    log INFO "Validating SSL certificate from Let's Encrypt..."
+    for ((i=1; i<=MAX_RETRIES; i++)); do
+        cert_info=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -issuer -subject -dates)
+
+        if [[ -n "$cert_info" ]]; then
+            issuer=$(echo "$cert_info" | grep '^issuer=')
+            subject=$(echo "$cert_info" | grep '^subject=')
+            not_before=$(echo "$cert_info" | grep '^notBefore=')
+            not_after=$(echo "$cert_info" | grep '^notAfter=')
+
+            log INFO "Issuer: $issuer"
+            log INFO "Subject: $subject"
+            log INFO "Certificate Valid from: ${not_before#notBefore=}"
+            log INFO "Certificate Expires on: ${not_after#notAfter=}"
+            return 0
+        else
+            log WARN "Unable to retrieve certificate (attempt $i/$MAX_RETRIES)."
+            [[ $i -lt $MAX_RETRIES ]] && sleep $SLEEP_INTERVAL
+        fi
+    done
+
+    log ERROR "Could not retrieve certificate details after $MAX_RETRIES attempts."
+    return 1
+}
+
 # Combines container health and optional certificate checks to confirm stack is operational
 check_services_up_running() {
     if ! check_containers_healthy; then
