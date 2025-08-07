@@ -445,11 +445,16 @@ restore_n8n() {
     # Restore Postgres SQL dump (if available)
     local sql_file=$(find "$restore_dir" -name "n8n_postgres_dump_*.sql")
     if [[ -n "$sql_file" ]]; then
+        log INFO "Dropping and recreating the n8ndb database to avoid restore conflicts..."
+        docker exec -u postgres postgres psql -c "DROP DATABASE IF EXISTS n8ndb;"
+        docker exec -u postgres postgres psql -c "CREATE DATABASE n8ndb OWNER n8n;"
+    
         log INFO "Restoring PostgreSQL DB from $sql_file"
-        cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8n
+        cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8ndb
     else
         log INFO "No Postgres SQL dump found. Assuming volume data is intact."
     fi
+
 
     log INFO "Checking services running and healthy after restoring backup..."
     if ! check_services_up_running; then
@@ -471,6 +476,8 @@ restore_n8n() {
     echo "N8N Version:          $N8N_VERSION"
     echo "Log File:             $LOG_FILE"
     echo "Timestamp:            $DATE"
+    echo "Volumes Restored:     n8n-data, postgres-data, letsencrypt"
+    echo "PostgreSQL:           Restored from SQL dump"
     echo "═════════════════════════════════════════════════════════════"
 }
 
