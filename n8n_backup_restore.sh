@@ -95,7 +95,6 @@ get_current_n8n_version() {
 # env file and docker-compose.yml
 
 backup_n8n() {
-    local DATE=$(date +%F_%H-%M-%S)
     local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
     mkdir -p "$BACKUP_PATH"
     log INFO "Starting backup at $DATE..."
@@ -303,7 +302,6 @@ check_containers_healthy() {
 }
 
 restore_n8n() {
-    local DATE=$(date +%F_%H-%M-%S)
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
         log ERROR "Restore file not found: $TARGET_RESTORE_FILE"
         exit 1
@@ -430,9 +428,9 @@ LOG_DIR="$N8N_DIR/logs"
 log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
 if [[ "$DO_BACKUP" == true ]]; then
-    LOG_FILE="$LOG_DIR/backup_n8n.log"
+    LOG_FILE="$LOG_DIR/backup_n8n_$DATE.log"
 elif [[ "$DO_RESTORE" == true ]]; then
-    LOG_FILE="$LOG_DIR/restore_n8n.log"
+    LOG_FILE="$LOG_DIR/restore_n8n_$DATE.log"
 fi
 
 exec > >(tee "$LOG_FILE") 2>&1
@@ -445,3 +443,8 @@ elif [[ "$DO_RESTORE" == true ]]; then
 else
     usage
 fi
+
+log INFO "Cleaning up local logs older than $DAYS_TO_KEEP days..."
+find "$LOG_DIR" -type f -name "backup_n8n_*.log" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+find "$LOG_DIR" -type f -name "restore_n8n_*.log" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+log INFO "Local cleanup logs completed."
