@@ -374,51 +374,6 @@ print_summary_message() {
 # Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
 verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
-
-    log INFO "Checking DNS resolution for domain..."
-    domain_ip=$(dig +short "$DOMAIN")
-    if [[ -z "$domain_ip" ]]; then
-        log ERROR "DNS lookup failed for $DOMAIN. Ensure it points to your server's IP."
-        return 1
-    fi
-
-    log INFO "Checking if your domain is reachable via HTTPS..."
-    response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$domain_url")
-
-    if [[ "$response" == "200" || "$response" == "301" || "$response" == "302" ]]; then
-        log INFO "Domain is reachable with HTTPS: $domain_url (HTTP Code: $response)"
-    elif [[ "$response" == "000" ]]; then
-        log ERROR "No HTTPS response received. Check if Traefik is exposing port 443 or if certs are valid."
-        return 1
-    else
-        log ERROR "Domain is not reachable via HTTPS (HTTP Code: $response)"
-        return 1
-    fi
-
-    log INFO "Validating SSL certificate from Let's Encrypt..."
-
-    cert_info=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -issuer -subject -dates)
-    if [[ -z "$cert_info" ]]; then
-        log ERROR "Could not retrieve certificate details. The certificate might not be installed, or SSL handshake failed."
-        return 1
-    fi
-
-    issuer=$(echo "$cert_info" | grep '^issuer=')
-    subject=$(echo "$cert_info" | grep '^subject=')
-    not_before=$(echo "$cert_info" | grep '^notBefore=')
-    not_after=$(echo "$cert_info" | grep '^notAfter=')
-
-    log INFO "Issuer: $issuer"
-    log INFO "Subject: $subject"
-    log INFO "Certificate Valid from: ${not_before#notBefore=}"
-    log INFO "Certificate Expires on: ${not_after#notAfter=}"
-
-    return 0
-}
-
-# Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
-verify_traefik_certificate() {
-    local domain_url="https://${DOMAIN}"
     local MAX_RETRIES=3
     local SLEEP_INTERVAL=10
 
