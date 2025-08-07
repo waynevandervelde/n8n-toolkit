@@ -438,7 +438,7 @@ restore_n8n() {
     docker compose up -d
 
     if ! check_containers_healthy; then
-        log ERROR "Some containers are not running or unhealthy. Restore failed!"
+        log ERROR "Some containers are not running or unhealthy. Stop restoration!"
         exit 1
     fi
 
@@ -449,6 +449,16 @@ restore_n8n() {
         cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8n
     else
         log INFO "No Postgres SQL dump found. Assuming volume data is intact."
+    fi
+
+    log INFO "Checking services running and healthy after restoring backup..."
+    if ! check_services_up_running; then
+        log ERROR "Some services and Traefik are not running or unhealthy after restoring the backup"
+        log ERROR "Restore the backup failed."
+        log INFO "Log File: $LOG_FILE"
+        exit 1
+    else
+       log INFO "Services running and healthy"
     fi
     
     # Cleanup temp
