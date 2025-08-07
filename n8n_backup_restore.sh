@@ -4,7 +4,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 #############################################################################################
-# N8N Backup & Restore Script (Enhanced)
+# N8N Backup & Restore Script
 # Author: TheNguyen
 # Email: thenguyen.ai.automation@gmail.com
 # Version: 1.0.0
@@ -49,6 +49,23 @@ log() {
     fi
 }
 
+# Load .env file
+load_env() {
+    if [[ -f ".env" ]]; then
+        set -o allexport
+        source .env
+        set +o allexport
+    else
+        log ERROR ".env file not found in current directory."
+        exit 1
+    fi
+
+    if [[ -z "$DOMAIN" ]]; then
+        log ERROR "DOMAIN is not set. Please ensure .env contains the DOMAIN variable"
+        exit 1
+    fi
+}
+
 # Handle errors and optionally send email alert
 handle_error() {
     log ERROR "Backup/Restore failed."
@@ -88,13 +105,14 @@ get_current_n8n_version() {
 # SQL dump of PostgreSQL database
 # .env and docker-compose.yml files
 # Manual backup:
-# n8n-data: Stores n8n workflows, credentials, settings.
+# n8n-data: Stores n8n workflows, credentials, and settings.
 #     docker run --rm -v n8n-data:/data -v $BACKUP_DIR:/backup alpine tar czf /backup/n8n-data.tar.gz -C /data .
 # postgres-data:	Stores the Postgres database used by n8n.
 #    docker exec postgres pg_dump -U n8n -d n8n > "$BACKUP_DIR/n8n_db_dump.sql"
 # env file and docker-compose.yml
 
 backup_n8n() {
+    load_env
     local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
     mkdir -p "$BACKUP_PATH"
 
@@ -149,6 +167,7 @@ backup_n8n() {
 
     log INFO "Local backup completed..."
     echo "═════════════════════════════════════════════════════════════"
+    echo "Domain:       https://${DOMAIN}"
     echo "Backup file:  $BACKUP_DIR/$BACKUP_FILE"
     echo "N8N Version:  $N8N_VERSION"
     echo "Log File:     $LOG_FILE"
@@ -383,6 +402,7 @@ check_services_up_running() {
 
 # Restores volumes and PostgreSQL database from a given backup archive
 restore_n8n() {
+    load_env
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
         log ERROR "Restore file not found: $TARGET_RESTORE_FILE"
         exit 1
@@ -446,9 +466,10 @@ restore_n8n() {
     local sql_file=$(find "$restore_dir" -name "n8n_postgres_dump_*.sql")
     if [[ -n "$sql_file" ]]; then
         log INFO "Dropping and recreating the n8ndb database to avoid restore conflicts..."
-        docker exec -u postgres postgres psql -c "DROP DATABASE IF EXISTS n8ndb;"
-        docker exec -u postgres postgres psql -c "CREATE DATABASE n8ndb OWNER n8n;"
-    
+        # Drop and recreate using the 'n8n' user
+        docker exec postgres psql -U n8n -c "DROP DATABASE IF EXISTS n8ndb;"
+        docker exec postgres psql -U n8n -c "CREATE DATABASE n8ndb OWNER n8n;"
+
         log INFO "Restoring PostgreSQL DB from $sql_file"
         cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8ndb
     else
@@ -472,6 +493,7 @@ restore_n8n() {
     local N8N_VERSION=$(get_current_n8n_version)
     log INFO "Restore completed successfully."
     echo "═════════════════════════════════════════════════════════════"
+    echo "Domain:               https://${DOMAIN}"
     echo "Restore from file:    $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
     echo "Log File:             $LOG_FILE"
