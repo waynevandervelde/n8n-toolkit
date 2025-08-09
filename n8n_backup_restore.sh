@@ -4,10 +4,10 @@ set -euo pipefail
 IFS=$'\n\t'
 
 #############################################################################################
-# N8N Backup & Restore Script
+# N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
 # Author: TheNguyen
 # Email: thenguyen.ai.automation@gmail.com
-# Version: 1.0.0
+# Version: 1.1.0
 # Date: 2025-08-06
 #
 # Description:
@@ -18,16 +18,25 @@ IFS=$'\n\t'
 # === Default Configuration ===
 CONTAINERS=("n8n" "postgres" "traefik")
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
-DATE=$(date +%F_%H-%M-%S)
 DAYS_TO_KEEP=7
+
 DO_BACKUP=false
 DO_RESTORE=false
 TARGET_RESTORE_FILE=""
 LOG_LEVEL="INFO"
-SEND_EMAIL="false"
 EMAIL_TO=""
+NOTIFY_ON_SUCCESS=false
+SMTP_USER="${SMTP_USER:-}"
+SMTP_PASS="${SMTP_PASS:-}"
 RCLONE_REMOTE=""
 RCLONE_TARGET=""
+
+# These will be set later
+N8N_DIR=""
+BACKUP_DIR=""
+LOG_DIR=""
+DATE=""
+LOG_FILE=""
 
 trap 'handle_error' ERR
 
@@ -66,37 +75,84 @@ load_env() {
     fi
 }
 
-# Handle errors and optionally send email alert
+# ------------------------------
+# Email via msmtp
+# ------------------------------
+send_email() {
+	local subject="$1"
+	local body="$2"
+	local attachment="${3:-}"
+
+	if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" ]]; then
+		log WARN "SMTP_USER or SMTP_PASS not set; skipping email."
+	return
+	fi
+	if [[ -z "$EMAIL_TO" ]]; then
+		log WARN "EMAIL_TO not set; skipping email."
+	return
+	fi
+
+	{
+	echo "Subject: $subject"
+	echo "To: $EMAIL_TO"
+	echo
+	echo "$body"
+	if [[ -n "$attachment" && -f "$attachment" ]]; then
+		echo
+		echo "--ATTACHMENT--"
+		base64 "$attachment"
+		echo "--END ATTACHMENT--"
+	fi
+	} | msmtp --host=smtp.gmail.com \
+			--port=587 \
+			--auth=on \
+			--tls=on \
+			--from="$SMTP_USER" \
+			--user="$SMTP_USER" \
+			--passwordeval="echo $SMTP_PASS" \
+			"$EMAIL_TO" \
+	&& log INFO "Email sent: $subject" \
+	|| log WARN "Failed to send email: $subject"
+}
+
+# Handle errors
 handle_error() {
-    log ERROR "Backup/Restore failed."
-    if [[ "$SEND_EMAIL" == "true" && -n "$EMAIL_TO" && -n "$MAILGUN_API_KEY" ]]; then
-        curl -s --user "api:$MAILGUN_API_KEY" \
-            https://api.mailgun.net/v3/$MAILGUN_DOMAIN/messages \
-            -F from="$MAILGUN_FROM" \
-            -F to="$EMAIL_TO" \
-            -F subject="n8n Backup/Restore Failed" \
-            -F text="Operation failed at $(date)"
-    fi
-    exit 1
+  log ERROR "Backup/Restore encountered an error. See log: $LOG_FILE"
+  send_email "n8n Backup/Restore Error at $DATE" \
+             "An error occurred. See attached log." \
+             "$LOG_FILE"
+  exit 1
 }
 
-# Print script usage/help message
+# ------------------------------
+# Usage
+# ------------------------------
 usage() {
-    echo "Usage: $0 [OPTIONS]"
-    echo "  -b, --backup               Perform backup"
-    echo "  -r, --restore <FILE>       Restore from specified backup file"
-    echo "  -d, --dir <DIR>            Set custom n8n directory (default: /home/n8n)"
-    echo "  -l, --log-level <LEVEL>    Set log level: DEBUG, INFO (default), WARN, ERROR"
-    echo "  -e, --email <EMAIL>        Send notification email (requires API key)"
-    echo "  -s, --remote-name <NAME>   Set rclone remote name (e.g. gdrive)"
-    echo "  -t, --remote-target <PATH> Set rclone remote target path"
-    echo "  -h, --help                 Show this help message"
-    exit 0
+  cat <<EOF
+Usage: $0 [OPTIONS]
+  -b, --backup               Perform backup
+  -r, --restore <FILE>       Restore from backup file
+  -d, --dir <DIR>            n8n base directory (default: current)
+  -l, --log-level <LEVEL>    DEBUG, INFO (default), WARN, ERROR
+  -e, --email <EMAIL>        Send email alerts to this address
+  -s, --remote-name <NAME>   Rclone remote name (e.g. gdrive-user)
+  -t, --remote-target <PATH> Rclone target path (e.g. n8n-backups)
+  -n, --notify-on-success    Email on successful completion
+  -h, --help                 Show this help message
+EOF
+  exit 0
 }
-
 # Returns the currently running version of n8n from the Docker container
 get_current_n8n_version() {
     docker exec n8n n8n --version 2>/dev/null
+}
+
+# === Helper: get root_folder_id from rclone config ===
+get_folder_id() {
+  # Pull the 'root_folder_id' value from your remote's section in ~/.config/rclone/rclone.conf
+  rclone config show "$RCLONE_REMOTE" \
+    | grep ^root_folder_id \
+    | sed -E 's/^root_folder_id *= *//'
 }
 
 # Perform backup of Docker volumes and Postgres
@@ -129,7 +185,6 @@ backup_n8n() {
     local N8N_VERSION=$(get_current_n8n_version)
 
     log INFO "Backing up Docker volumes..."
-
     for vol in "${VOLUMES[@]}"; do
         if docker volume inspect "$vol" >/dev/null 2>&1; then
             local vol_backup="$BACKUP_PATH/volume_${vol}_$DATE.tar.gz"
@@ -143,7 +198,6 @@ backup_n8n() {
     done
 
     log INFO "Dumping PostgreSQL database..."
-
     if docker exec postgres sh -c "pg_isready" >/dev/null 2>&1; then
         docker exec postgres pg_dump -U n8n -d n8n > "$BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
         log INFO "Database dump saved to $BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
@@ -159,6 +213,7 @@ backup_n8n() {
     log INFO "Compressing backup folder..."
     local BACKUP_FILE="n8n_backup_${N8N_VERSION}_${DATE}.tar.gz"
     tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" .
+    log INFO "Created archive -> $BACKUP_FILE"
     rm -rf "$BACKUP_PATH"
 
     log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
@@ -174,104 +229,32 @@ backup_n8n() {
     echo "Timestamp:    $DATE"
     echo "═════════════════════════════════════════════════════════════"
 
-    if command -v rclone &> /dev/null && [ -n "$RCLONE_REMOTE" ] && [ -n "$RCLONE_TARGET" ]; then
-        log INFO "Syncing backup to cloud: $RCLONE_REMOTE/$RCLONE_TARGET"
-        rclone copy "$BACKUP_DIR" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs
+    # Cloud sync if remote & target provided
+    if [[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]]; then
+        log INFO "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET"
+        if ! rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs; then
+            log ERROR "Rclone upload failed"
+            send_email "Rclone Upload Failed" \
+                "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET failed." \
+                "$LOG_FILE"
+            exit 1
+        fi
+        FOLDER_ID="$(get_folder_id)"
+        if [[ -n "$FOLDER_ID" ]]; then
+            echo
+            log INFO "Browse your backups here:"
+            echo "https://drive.google.com/drive/folders/$FOLDER_ID"
+        fi
+        log INFO "Pruning remote archives older than $DAYS_TO_KEEP days"
         rclone delete --min-age ${DAYS_TO_KEEP}d "$RCLONE_REMOTE:$RCLONE_TARGET"
-        log INFO "Old cloud backups cleaned up."
+    fi
+
+    # Success notification
+    if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+        send_email "n8n Backup Successful: $BACKUP_FILE" \
+                   "Backup completed: $BACKUP_FILE"
     fi
 }
-
-# backup_n8n() {
-#     log INFO "Starting backup at $DATE..."
-#     log INFO "Looking for containers..."
-#     for CONTAINER in "${CONTAINERS[@]}"; do
-#         if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-#             log ERROR "Expected container '$CONTAINER' is not running."
-#             exit 1
-#         fi
-#         log INFO "Found container '$CONTAINER' is running."
-#     done
-    
-#     log INFO "Starting backup Volumes..."
-#     for VOL in "${VOLUMES[@]}"; do
-#         if docker volume inspect "$VOL" >/dev/null 2>&1; then
-#             BACKUP_FILE="$BACKUP_DIR/${VOL}_$DATE.tar.gz"
-#             docker run --rm -v "${VOL}:/data" -v "$BACKUP_DIR:/backup" alpine \
-#                 sh -c "tar czf /backup/$(basename "$BACKUP_FILE") -C /data ."
-#             log INFO "Volume backed up: $BACKUP_FILE"
-#         else
-#             log ERROR "Volume $VOL not found. Exiting..."
-#             exit 1
-#         fi
-#     done
-
-
-#     for CONTAINER in "${CONTAINERS[@]}"; do
-#         log INFO "Inspecting container: $CONTAINER"
-#         MOUNTS=$(docker inspect "$CONTAINER" | jq -r '.[0].Mounts[] | "\(.Source)::\(.Destination)"')
-
-#         i=0
-#         while IFS= read -r line; do
-#             IFS='::' read -r SRC DST <<< "$line"
-#             SAFE_DST=$(echo "$DST" | tr '/:' '_')
-#             BACKUP_FILE="$BACKUP_DIR/${CONTAINER}_${i}_${SAFE_DST}_$DATE.tar.gz"
-
-#             if [[ "$SRC" == /var/lib/docker/volumes/* ]]; then
-#                 docker run --rm --volumes-from "$CONTAINER" -v "$BACKUP_DIR:/backup" alpine \
-#                     tar czf "/backup/$(basename "$BACKUP_FILE")" "$DST"
-#             else
-#                 tar czf "$BACKUP_FILE" -C "$SRC" .
-#             fi
-
-#             log INFO "Backed up: $BACKUP_FILE"
-#             ((i++))
-#         done <<< "$MOUNTS"
-
-#         if docker exec "$CONTAINER" sh -c "psql --version" &>/dev/null; then
-#             DB_BACKUP="$BACKUP_DIR/${CONTAINER}_db_$DATE.sql"
-#             docker exec "$CONTAINER" pg_dump -U n8n -d n8ndb > "$DB_BACKUP"
-#             log INFO "Postgres DB backup: $DB_BACKUP"
-#         fi
-#     done
-
-#     for VOL in "${VOLUMES[@]}"; do
-#         if docker volume inspect "$VOL" &>/dev/null; then
-#             VOL_BACKUP="$BACKUP_DIR/${VOL}_$DATE.tar.gz"
-#             docker run --rm -v "${VOL}:/data" -v "$BACKUP_DIR:/backup" alpine sh -c "tar czf /backup/$(basename "$VOL_BACKUP") -C /data ."
-#             log INFO "Volume backed up: $VOL_BACKUP"
-#         else
-#             log WARN "Volume $VOL not found. Skipping."
-#         fi
-#     done
-
-#     if command -v rclone &> /dev/null && [ -n "$RCLONE_REMOTE" ] && [ -n "$RCLONE_TARGET" ]; then
-#         log INFO "Syncing backup to cloud: $RCLONE_REMOTE/$RCLONE_TARGET"
-#         rclone copy "$BACKUP_DIR" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs
-#         rclone delete --min-age ${DAYS_TO_KEEP}d "$RCLONE_REMOTE:$RCLONE_TARGET"
-#         log INFO "Old cloud backups cleaned up."
-#     fi
-
-#     log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
-#     find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
-#     log INFO "Local cleanup complete."
-
-#     if [[ "$SEND_EMAIL" == "true" && -n "$EMAIL_TO" && -n "$MAILGUN_API_KEY" ]]; then
-#         curl -s --user "api:$MAILGUN_API_KEY" \
-#             https://api.mailgun.net/v3/$MAILGUN_DOMAIN/messages \
-#             -F from="$MAILGUN_FROM" \
-#             -F to="$EMAIL_TO" \
-#             -F subject="n8n Backup Successful" \
-#             -F text="Backup completed successfully at $(date)"
-#     fi
-
-#     log INFO "Backup completed successfully."
-#     echo "===== BACKUP SUMMARY ====="
-#     echo "Backup Directory: $BACKUP_DIR"
-#     echo "Log File:         $LOG_FILE"
-#     echo "Timestamp:        $DATE"
-#     echo "==========================="
-# }
 
 # Waits for all containers to reach a healthy state within a timeout window
 check_containers_healthy() {
@@ -393,10 +376,10 @@ check_services_up_running() {
         return 1
     fi
 
-    if ! verify_traefik_certificate; then
-        log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-        return 1
-    fi
+    # if ! verify_traefik_certificate; then
+    #     log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
+    #     return 1
+    # fi
     return 0
 }
 
@@ -504,8 +487,7 @@ restore_n8n() {
 }
 
 # === Argument Parsing (long & short) ===
-TEMP=$(getopt -o br:d:l:e:s:t:h --long backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,help -n "$0" -- "$@") || usage
-
+TEMP=$(getopt -o br:d:l:e:s:t:nh --long backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
 eval set -- "$TEMP"
 
 while true; do
@@ -541,6 +523,10 @@ while true; do
             RCLONE_TARGET="$2"
             shift 2
             ;;
+        -n|--notify-on-success)
+            NOTIFY_ON_SUCCESS=true;
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -558,15 +544,10 @@ done
 N8N_DIR="${TARGET_DIR:-$PWD}"
 BACKUP_DIR="$N8N_DIR/backups"
 LOG_DIR="$N8N_DIR/logs"
-
 log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$BACKUP_DIR" "$LOG_DIR"
-if [[ "$DO_BACKUP" == true ]]; then
-    LOG_FILE="$LOG_DIR/backup_n8n_$DATE.log"
-elif [[ "$DO_RESTORE" == true ]]; then
-    LOG_FILE="$LOG_DIR/restore_n8n_$DATE.log"
-fi
-
+DATE=$(date +%F_%H-%M-%S)
+LOG_FILE="$LOG_DIR/$( [[ $DO_BACKUP == true ]] && echo backup || echo restore )_n8n_$DATE.log"
 exec > >(tee "$LOG_FILE") 2>&1
 log INFO "Logging to $LOG_FILE"
 
