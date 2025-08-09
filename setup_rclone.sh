@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+#############################################################################################
+# setup_rclone.sh
+# Author: TheNguyen
+# Email: thenguyen.ai.automation@gmail.com
+# Version: 1.0.0
+# Date: 2025-08-09
+#
+# Description:
+#   A one‐stop installer & tester for Rclone → Google Drive
+#############################################################################################
+
 # ------------------------------
-# Logging (your function)
+# Logging
 # ------------------------------
 LOG_LEVEL="${LOG_LEVEL:-INFO}"
 log() {
@@ -14,9 +25,85 @@ log() {
     WARN)  [[ "$level" == "WARN" || "$level" == "ERROR" ]] && show=0 ;;
     ERROR) [[ "$level" == "ERROR" ]] && show=0 ;;
   esac
-  if [[ $show -eq 0 ]]; then
-    echo "[$level] $*"
-  fi
+  [[ $show -eq 0 ]] && echo "[$level] $*"
+}
+
+# ------------------------------
+# Usage & Help
+# ------------------------------
+usage() {
+  cat <<EOF
+setup_rclone.sh — Interactive Rclone→Google Drive Setup
+
+USAGE:
+  $0 [ -h | --help ]   # Show this manual
+  $0 [ -t ]            # Test mode: install/check rclone & show existing config
+  $0                   # Full interactive setup + test cycle
+
+OPTIONS:
+  -h, --help   Show detailed manual steps.
+  -t           Test/install rclone and list any existing Rclone config/remotes.
+
+MANUAL STEPS (shown with -h):
+  1) Create OAuth credentials:
+     • Go to https://console.cloud.google.com/apis/credentials
+     • +CREATE CREDENTIALS → OAuth client ID → Desktop app
+     • Copy Client ID & Client Secret
+
+  2) Add yourself as a Test User:
+     • In Cloud Console → OAuth consent screen → Test users → Add your email
+
+  3) Perform headless OAuth:
+     • On Windows:
+         ssh -N -L 53682:127.0.0.1:53682 root@VPS_IP
+     • On VPS:
+         rclone authorize "drive" --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+     • In your Windows browser:
+         1. Paste the printed URL
+         2. Sign in & click Allow
+         3. Copy the entire JSON blob
+
+  4) Create & share your backup folder:
+     • In Google Drive, create a folder named "n8n-backups"
+     • Share it with your service account or yourself
+     • Copy its folder ID (string after /folders/ in the URL)
+
+  5) Manual config & test cycle:
+     ```bash
+     mkdir -p ~/.config/rclone
+     nano ~/.config/rclone/rclone.conf
+     ```
+     Paste this block (fill YOUR_* values):
+     ```
+     [gdrive-user]
+     type = drive
+     client_id = YOUR_CLIENT_ID
+     client_secret = YOUR_CLIENT_SECRET
+     scope = drive.file
+     root_folder_id = YOUR_N8N_BACKUPS_FOLDER_ID
+     token = YOUR_COPIED_JSON_BLOB
+     ```
+     Save & exit.
+     Test upload with timestamped file:
+     ```bash
+     # list (empty or existing)
+     rclone ls gdrive-user:
+
+     # create test file
+     F="rclone_setup_test_$(date +%s).txt"
+     echo "rclone setup test $(date)" > "/tmp/$F"
+
+     # upload
+     rclone copy "/tmp/$F" gdrive-user:"$F"
+
+     # verify
+     rclone ls gdrive-user:
+
+     # cleanup
+     rclone delete gdrive-user:"$F"
+     rm "/tmp/$F"
+     ```
+EOF
 }
 
 # ------------------------------
@@ -26,184 +113,117 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || { log ERROR "Missing command: $1"; exit 1; }
 }
 
-# Sanitize/derive folder ID from input (URL or raw ID)
-extract_folder_id() {
-  local input="$1"
-  # If it's a Drive folder URL, extract the ID; else return input as-is.
-  if [[ "$input" =~ ^https?://[^/]+/drive/folders/([A-Za-z0-9_-]+) ]]; then
-    echo "${BASH_REMATCH[1]}"
-  else
-    echo "$input"
-  fi
-}
-
 read_default() {
-  # read with default: read_default "Prompt" "default_value" varname
-  local prompt="$1"
-  local default="$2"
-  local __outvar="$3"
-  local reply
-  read -r -p "$prompt [$default]: " reply || true
-  if [[ -z "${reply:-}" ]]; then
-    printf -v "$__outvar" "%s" "$default"
-  else
-    printf -v "$__outvar" "%s" "$reply"
-  fi
+  local prompt="$1" default="$2" __outvar="$3" reply
+  read -e -rp "$prompt [$default]: " reply || true
+  [[ -z "$reply" ]] && reply="$default"
+  printf -v "$__outvar" "%s" "$reply"
 }
 
-# ------------------------------
-# Pre-flight
-# ------------------------------
-log INFO "This will set up an rclone remote for Google Drive using a Service Account."
+read_required() {
+  local prompt="$1" __outvar="$2" reply
+  while :; do
+    read -e -rp "$prompt: " reply
+    [[ -n "$reply" ]] && break
+    echo "  → This value is required."
+  done
+  printf -v "$__outvar" "%s" "$reply"
+}
+
+extract_folder_id() {
+  local input="${1%/}"
+  echo "${input##*/}"
+}
+
+# ---------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------
+TEST_ONLY=0
+if [[ "${1:-}" =~ ^(-h|--help)$ ]]; then
+  usage; exit 0
+elif [[ "${1:-}" == "-t" ]]; then
+  TEST_ONLY=1
+fi
+
+# ---------------------------------------------------
+# TEST MODE
+# ---------------------------------------------------
+if [[ $TEST_ONLY -eq 1 ]]; then
+  log INFO "🚦 Test mode: verifying Rclone & config"
+  if ! command -v rclone >/dev/null; then
+    log INFO "Rclone not found. Installing..."
+    curl https://rclone.org/install.sh | sudo bash
+  else
+    log INFO "Rclone is installed: $(rclone version | head -n1)"
+  fi
+
+  CONFIG="$HOME/.config/rclone/rclone.conf"
+  if [[ -f "$CONFIG" ]]; then
+    log INFO "Found rclone config at $CONFIG"
+    rclone listremotes
+  else
+    log WARN "No rclone config found at $CONFIG"
+  fi
+  exit 0
+fi
+
+# ---------------------------------------------------
+# FULL INTERACTIVE SETUP
+# ---------------------------------------------------
+log INFO "🛠️  Rclone Google Drive OAuth Setup"
 
 require_cmd rclone
-require_cmd sed
-require_cmd awk
-# jq is optional for nicer JSON parsing
-if ! command -v jq >/dev/null 2>&1; then
-  log WARN "jq is not installed. Falling back to basic parsing for service account email."
-fi
-
-# ------------------------------
-# Inputs
-# ------------------------------
-REMOTE_NAME=""
-SA_JSON=""
-FOLDER_INPUT=""
-ROOT_FOLDER_ID=""
-
-read_default "Remote name" "gdrive-sa" REMOTE_NAME
-read_default "Path to Service Account JSON" "/root/rclone-sa.json" SA_JSON
-
-if [[ ! -f "$SA_JSON" ]]; then
-  log ERROR "Service Account JSON not found at: $SA_JSON"
-  log INFO "Make sure you uploaded the JSON file to the server. Example: scp rclone-sa.json user@server:/root/"
-  exit 1
-fi
-
-# Extract service account email
-if command -v jq >/dev/null 2>&1; then
-  SA_EMAIL="$(jq -r '.client_email // empty' "$SA_JSON")"
-else
-  # crude fallback: try to parse email from JSON
-  SA_EMAIL="$(grep -oE '"client_email"\s*:\s*"[^"]+"' "$SA_JSON" | sed -E 's/.*:\s*"([^"]+)".*/\1/')"
-fi
-
-if [[ -z "${SA_EMAIL:-}" ]]; then
-  log WARN "Could not parse service account email from JSON."
-else
-  log INFO "Service Account email: $SA_EMAIL"
-  log INFO "If your target folder is owned by another Google account, SHARE that folder with this email."
-fi
+require_cmd mkdir
+require_cmd nano
 
 echo
-log INFO "OPTIONAL: Target a specific Google Drive folder (recommended)"
-echo "- You can paste a folder URL (https://drive.google.com/drive/folders/XXXXXXXX) or just its ID"
-echo "- Leave empty to use the Service Account's root drive"
-read -r -p "Folder URL or ID (optional): " FOLDER_INPUT || true
+read_default  "Remote name"              "gdrive-user"        REMOTE_NAME
+read_required "Google OAuth Client ID"   CLIENT_ID
+read_required "Google OAuth Client Secret" CLIENT_SECRET
 
-ROOT_FOLDER_ID="$(extract_folder_id "${FOLDER_INPUT:-}")"
-if [[ -n "$ROOT_FOLDER_ID" ]]; then
-  log INFO "Using root_folder_id: $ROOT_FOLDER_ID"
-else
-  [[ -n "${FOLDER_INPUT:-}" ]] && log WARN "Could not parse a valid folder ID from input. Proceeding without root_folder_id."
-fi
+echo
+echo "❗ Paste the OAuth JSON blob you copied (single line):"
+read_required "OAuth JSON" PASTED_JSON
 
-# ------------------------------
-# Create / replace rclone remote
-# ------------------------------
-# If remote exists, offer to replace
-if rclone config show | grep -q "^\[$REMOTE_NAME\]$"; then
-  read -r -p "Remote '$REMOTE_NAME' already exists. Replace it? [y/N]: " yn || true
-  yn="${yn:-N}"
-  if [[ "$yn" =~ ^[Yy]$ ]]; then
-    rclone config delete "$REMOTE_NAME" >/dev/null 2>&1 || true
-  else
-    log INFO "Keeping existing remote. Skipping creation."
-  fi
-fi
+echo
+read_required "Drive folder (URL or ID)" RAW_FOLDER
+FOLDER_ID="$(extract_folder_id "$RAW_FOLDER")"
+log INFO "Using Drive folder ID: $FOLDER_ID"
 
-if ! rclone config show | grep -q "^\[$REMOTE_NAME\]$"; then
-  log INFO "Creating rclone remote '$REMOTE_NAME'..."
-  if [[ -n "$ROOT_FOLDER_ID" ]]; then
-    rclone config create "$REMOTE_NAME" drive \
-      scope=drive \
-      service_account_file="$SA_JSON" \
-      root_folder_id="$ROOT_FOLDER_ID" \
-      --non-interactive >/dev/null
-  else
-    rclone config create "$REMOTE_NAME" drive \
-      scope=drive \
-      service_account_file="$SA_JSON" \
-      --non-interactive >/dev/null
-  fi
-  log INFO "Remote '$REMOTE_NAME' created."
-fi
+# Write config
+CONFIG_DIR="$HOME/.config/rclone"
+CONFIG_FILE="$CONFIG_DIR/rclone.conf"
+mkdir -p "$CONFIG_DIR"
+cat > "$CONFIG_FILE" <<EOF
+[$REMOTE_NAME]
+type = drive
+client_id = $CLIENT_ID
+client_secret = $CLIENT_SECRET
+scope = drive.file
+root_folder_id = $FOLDER_ID
+token = $PASTED_JSON
+EOF
+log INFO "Config written to $CONFIG_FILE"
 
-# ------------------------------
-# Connectivity tests
-# ------------------------------
-log INFO "Testing connection: listing folder..."
-if ! rclone lsd "${REMOTE_NAME}:" >/dev/null 2>&1; then
-  log ERROR "Failed to list directory for ${REMOTE_NAME}:. Check sharing/permissions and folder ID."
-  exit 1
-fi
-log INFO "List OK."
+# Connectivity & test cycle
+echo
+log INFO "➤ Listing existing files in '$REMOTE_NAME:'"
+rclone ls "$REMOTE_NAME:" || { log ERROR "List failed"; exit 1; }
 
-# Quick write probe: try to create an empty file in the target
-log INFO "Probing write access..."
-if ! rclone touch "${REMOTE_NAME}:__rclone_write_probe__.tmp" >/dev/null 2>&1; then
-  log ERROR "Write probe failed. The Service Account likely has no write permission to this folder."
-  log INFO "Fix: In Google Drive, share the folder with ${SA_EMAIL} as Editor (not Viewer), then re-run this script."
-  exit 1
-fi
+TEST_LOCAL="/tmp/rclone_setup_test_$(date +%s).txt"
+echo "rclone setup test $(date)" > "$TEST_LOCAL"
+log INFO "Created local test file: $TEST_LOCAL"
 
-# Clean up probe file
-rclone delete "${REMOTE_NAME}:__rclone_write_probe__.tmp" >/dev/null 2>&1 || true
+TEST_REMOTE="rclone_setup_test_$(date +%s).txt"
+log INFO "Uploading test file as '$TEST_REMOTE'..."
+rclone copyto "$TEST_LOCAL" "$REMOTE_NAME:$TEST_REMOTE" || { log ERROR "Upload failed"; exit 1; }
 
-# Make a test file locally
-TEST_NAME="rclone_setup_test_$(date +%s).txt"
-TMP_FILE="$(mktemp)"
-echo "rclone setup test $(date)" > "$TMP_FILE"
+log INFO "Confirming remote file..."
+rclone ls "$REMOTE_NAME:" | grep -q "$TEST_REMOTE" || { log ERROR "Remote test not found"; exit 1; }
 
-log INFO "Uploading test file (copy -> copyto -> rcat fallbacks): $TEST_NAME"
+log INFO "Cleaning up test file..."
+rclone delete "$REMOTE_NAME:$TEST_REMOTE" || log WARN "Could not delete remote test"
+rm -f "$TEST_LOCAL"
 
-# 1) Try 'copy' to the remote root (works even if 'copyto' gets picky)
-if rclone copy "$TMP_FILE" "${REMOTE_NAME}:" -vv; then
-  log INFO "Upload via 'rclone copy' succeeded."
-else
-  log WARN "'rclone copy' failed. Trying 'copyto'..."
-  # 2) Try copyto to a specific object path
-  if rclone copyto "$TMP_FILE" "${REMOTE_NAME}:$TEST_NAME" -vv; then
-    log INFO "Upload via 'rclone copyto' succeeded."
-  else
-    log WARN "'rclone copyto' failed. Trying 'rcat'..."
-    # 3) Last resort: stream the content via rcat
-    if echo "rclone setup test $(date)" | rclone rcat "${REMOTE_NAME}:$TEST_NAME" -vv; then
-      log INFO "Upload via 'rclone rcat' succeeded."
-    else
-      log ERROR "All upload methods failed. See the verbose logs above for the exact error."
-      rm -f "$TMP_FILE"
-      exit 1
-    fi
-  fi
-fi
-
-rm -f "$TMP_FILE"
-
-log INFO "Listing contents to verify..."
-rclone ls "${REMOTE_NAME}:" | awk '{print "[INFO] " $0}'
-
-log INFO "Removing test file..."
-if ! rclone delete "${REMOTE_NAME}:$TEST_NAME" >/dev/null 2>&1; then
-  log WARN "Could not delete test file. You can remove it manually later."
-else
-  log INFO "Test file removed."
-fi
-
-log INFO "rclone remote '$REMOTE_NAME' is ready to use."
-if [[ -n "$ROOT_FOLDER_ID" ]]; then
-  log INFO "All operations will target the folder with ID: $ROOT_FOLDER_ID"
-else
-  log INFO "No folder ID set; operations will use the Service Account's root drive."
-fi
+echo
+log INFO "✅ Setup & test complete! '$REMOTE_NAME' is bound to folder ID $FOLDER_ID."
