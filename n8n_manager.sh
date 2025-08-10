@@ -242,10 +242,20 @@ validate_compose_and_env() {
 install_docker() {
     log INFO "Removing any old Docker versions..."
     apt-get remove -y docker docker-engine docker.io containerd runc
-
     log INFO "Installing required dependencies..."
     apt-get update
-    apt-get install -y ca-certificates curl gnupg lsb-release jq vim yamllint
+    apt-get install -y \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    jq \
+    vim \
+    rsync \
+    tar \
+    msmtp \
+    rclone \
+    dnsutils
 
     log INFO "Adding Docker GPG key (non-interactive)..."
     mkdir -p /etc/apt/keyrings
