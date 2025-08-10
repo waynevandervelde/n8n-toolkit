@@ -16,7 +16,9 @@ IFS=$'\n\t'
 #     • Dumps the PostgreSQL database
 #     • Archives .env and docker-compose.yml
 #     • Detects changes to avoid redundant backups (unless --force)
+#     • Rolling 30-day Markdown summary (`backup_summary.md`)
 #     • Optionally syncs backups to Google Drive via rclone
+#     • Prints a console summary
 #     • Sends failure/success notifications over Gmail SMTP (msmtp)
 #############################################################################################
 
@@ -38,10 +40,16 @@ RCLONE_TARGET=""
 
 # These will be set later
 N8N_DIR=""
+N8N_VERSION=""
 BACKUP_DIR=""
 LOG_DIR=""
 DATE=""
 LOG_FILE=""
+ACTION=""
+BACKUP_STATUS=""
+UPLOAD_STATUS=""
+BACKUP_FILE=""
+DRIVE_LINK=""
 
 ################################################################################
 # log(level, message...)
@@ -69,19 +77,9 @@ log() {
 #   Source .env for DOMAIN and other variables, exiting if missing.
 ################################################################################
 load_env() {
-    if [[ -f ".env" ]]; then
-        set -o allexport
-        source .env
-        set +o allexport
-    else
-        log ERROR ".env file not found in current directory."
-        exit 1
-    fi
-
-    if [[ -z "$DOMAIN" ]]; then
-        log ERROR "DOMAIN is not set. Please ensure .env contains the DOMAIN variable"
-        exit 1
-    fi
+    [[ -f .env ]] || { log ERROR ".env not found."; exit 1; }
+    set -o allexport; source .env; set +o allexport
+    [[ -n "${DOMAIN:-}" ]] || { log ERROR "DOMAIN not set in .env"; exit 1; }
 }
 
 ################################################################################
@@ -122,13 +120,13 @@ send_email() {
 #   Trap for any uncaught error: logs, sends failure email, and exits.
 ################################################################################
 handle_error() {
-  log ERROR "Backup/Restore encountered an error. See log: $LOG_FILE"
-  send_email "n8n Backup/Restore Error at $DATE" \
-             "An error occurred. See attached log." \
-             "$LOG_FILE"
-  exit 1
+    write_summary "Error" "FAIL"
+    log ERROR "Unhandled error. See $LOG_FILE"
+    send_email "$DATE: n8n Backup FAILED locally" \
+               "An error occurred. See attached log." \
+               "$LOG_FILE"
+    exit 1
 }
-
 trap 'handle_error' ERR
 
 ################################################################################
@@ -149,7 +147,7 @@ Usage: $0 [OPTIONS]
   -n, --notify-on-success    Email on successful completion
   -h, --help                 Show this help message
 EOF
-  exit 0
+  exit 1
 }
 
 ################################################################################
@@ -165,54 +163,78 @@ initialize_snapshot() {
                   "$BACKUP_DIR/snapshot/volumes/$vol/"
         done
         mkdir -p "$BACKUP_DIR/snapshot/config"
-        rsync -a "$N8N_DIR/.env"              "$BACKUP_DIR/snapshot/config/"
+        rsync -a "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
         rsync -a "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
         log INFO "Snapshot bootstrapped."
     fi
 }
 
 ################################################################################
-# system_changed()
-#   Returns 0 if any new/modified file exists compared to snapshot, or if forced.
+# refresh_snapshot()
+#   After a successful backup, mirror live volumes & config into snapshot/
 ################################################################################
-# Returns 0 if any new or modified file is found (or forced), 1 otherwise
-system_changed() {
-    [[ "$DO_FORCE" == true ]] && return 0
-    local changed=0
+refresh_snapshot() {
+  log INFO "Updating snapshot to current state…"
+  for vol in "${VOLUMES[@]}"; do
+    rsync -a --delete \
+      --exclude='pg_wal/**' \
+      --exclude='pg_stat_tmp/**' \
+      --exclude='pg_logical/**' \
+      "/var/lib/docker/volumes/${vol}/_data/" \
+      "$BACKUP_DIR/snapshot/volumes/$vol/"
+  done
+  rsync -a --delete "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
+  rsync -a --delete "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
+  log INFO "Snapshot refreshed."
+}
 
+################################################################################
+# is_system_changed()
+#   Compares live volumes & config against the snapshot.
+#   Excludes pg_wal, pg_stat_tmp, pg_logical dirs (to avoid false positives).
+#   Returns 0 if any file has been added/modified (i.e. system changed),
+#   Returns 1 otherwise.
+################################################################################
+is_system_changed() {
+    local src dest diffs file
+
+    # Check each named volume
     for vol in "${VOLUMES[@]}"; do
-        local src="/var/lib/docker/volumes/${vol}/_data/"
-        local dest="$BACKUP_DIR/snapshot/volumes/${vol}/"
+        src="/var/lib/docker/volumes/${vol}/_data/"
+        dest="$BACKUP_DIR/snapshot/volumes/${vol}/"
         mkdir -p "$dest"
-        # dry-run: list items; filter out dirs (ending with '/')
-        local diffs
-        diffs=$(rsync -rtun --out-format="%n" "$src" "$dest" \
-                | grep -v '/$') || true
+
+        # rsync dry-run listing (omit directory entries)
+		diffs=$(
+		  rsync -rtun \
+		    --exclude='pg_wal/**' \
+		    --exclude='pg_stat_tmp/**' \
+		    --exclude='pg_logical/**' \
+		    --out-format="%n" \
+		    "$src" "$dest" \
+		  | grep -v '/$'
+		) || true
 
         if [[ -n "$diffs" ]]; then
             log INFO "Change detected in volume: $vol"
-            log DEBUG "Changed files:\n$diffs"
-            changed=1
-            break
+            log INFO "  $diffs"
+            return 0
         fi
     done
 
-    if [[ $changed -eq 0 ]]; then
-        local dest_cfg="$BACKUP_DIR/snapshot/config/"
-        for file in .env docker-compose.yml; do
-            local diffs
-            diffs=$(rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest_cfg" \
-                    | grep -v '/$') || true
-            if [[ -n "$diffs" ]]; then
-                log INFO "Change detected in config: $file"
-                log DEBUG "Changed config lines:\n$diffs"
-                changed=1
-                break
-            fi
-        done
-    fi
+    # Check config files
+    dest="$BACKUP_DIR/snapshot/config/"
+    for file in .env docker-compose.yml; do
+        diffs=$(rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest" | grep -v '/$') || true
+        if [[ -n "$diffs" ]]; then
+            log INFO "Change detected in config: $file"
+            log INFO "  $diffs"
+            return 0
+        fi
+    done
 
-    (( changed == 1 ))
+    # No differences found
+    return 1
 }
 
 ################################################################################
@@ -224,14 +246,278 @@ get_current_n8n_version() {
 }
 
 ################################################################################
-# get_folder_id()
-#   Extracts root_folder_id from rclone config for later Drive URL.
+# get_google_drive_link()
+#   If RCLONE_REMOTE and RCLONE_TARGET are set, reads root_folder_id
+#   from rclone.conf and echoes the Drive folder URL.
+#   Otherwise echoes an empty string.
 ################################################################################
-get_folder_id() {
-  # Pull the 'root_folder_id' value from your remote's section in ~/.config/rclone/rclone.conf
-  rclone config show "$RCLONE_REMOTE" \
-    | grep ^root_folder_id \
-    | sed -E 's/^root_folder_id *= *//'
+get_google_drive_link() {
+    # If no remote or no target, output nothing
+    if [[ -z "$RCLONE_REMOTE" || -z "$RCLONE_TARGET" ]]; then
+        echo ""
+        return
+    fi
+
+    # Read the root_folder_id from rclone config
+    local folder_id
+    folder_id=$(rclone config show "$RCLONE_REMOTE" 2>/dev/null \
+                | awk -F '=' '/^root_folder_id/ { gsub(/ /,"",$2); print $2 }')
+
+    if [[ -n "$folder_id" ]]; then
+        echo "https://drive.google.com/drive/folders/$folder_id"
+    else
+        log WARN "Could not find root_folder_id for remote '$RCLONE_REMOTE'"
+        echo ""
+    fi
+}
+
+################################################################################
+# write_summary(action, status)
+#   Appends a row to backup_summary.md and prunes entries older than 30 days.
+################################################################################
+write_summary() {
+    local action="$1" status="$2"
+	local version="$N8N_VERSION"
+    local file="$BACKUP_DIR/backup_summary.md"
+    local now; now=$(date '+%F_%H-%M-%S')
+    local cutoff; cutoff=$(date -d '30 days ago' '+%F')
+
+    # If the file doesn't exist, write the markdown table header
+    if [[ ! -f "$file" ]]; then
+        cat >> "$file" <<'EOF'
+| DATE               | ACTION         | N8N_VERSION | STATUS   |
+|--------------------|----------------|-------------|----------|
+EOF
+    fi
+
+    # Append a new row
+    printf "| %s | %s | %s | %s |\n" "$now" "$action" "$version" "$status" >> "$file"
+
+    # Prune rows older than 30 days (match YYYY-MM-DD at start of each row)
+    # We'll keep the header plus any rows whose DATE ≥ cutoff
+    {
+      # print header
+      head -n2 "$file"
+      # filter data rows
+      tail -n +3 "$file" \
+        | awk -v cut="$cutoff" -F'[| ]+' '$2 >= cut'
+    } > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+
+################################################################################
+# do_local_backup()
+#   Performs the “local backup” step: volumes → tar.gz,
+#   DB dump, config files, final archive.  On success sets
+#   $BACKUP_FILE and returns 0; on any error returns 1.
+################################################################################
+do_local_backup() {
+    # Temporarily disable errexit so we can catch errors
+    set +e
+
+    local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
+    mkdir -p "$BACKUP_PATH" || { log ERROR "Failed to create $BACKUP_PATH"; return 1; }
+
+ 	log INFO "Checking services running and healthy before starting backup..."
+    if ! check_services_up_running; then
+		log ERROR "Services unhealthy; aborting backup."
+   		return 1
+   	else
+       log INFO "Services running and healthy"
+    fi
+
+    log INFO "Starting backup at $DATE..."
+	log INFO "Backing up Docker volumes..."
+    for vol in "${VOLUMES[@]}"; do
+        if ! docker volume inspect "$vol" &>/dev/null; then
+            log ERROR "Volume $vol not found"
+            return 1
+        fi
+        local vol_backup="volume_${vol}_$DATE.tar.gz"
+        docker run --rm \
+            -v "${vol}:/data" \
+            -v "$BACKUP_PATH:/backup" \
+            alpine \
+            sh -c "tar czf /backup/$vol_backup -C /data ." \
+        || { log ERROR "Failed to archive volume $vol"; return 1; }
+        log INFO "Volume '$vol' backed up: $vol_backup"
+    done
+
+	log INFO "Dumping PostgreSQL database..."
+    if docker exec postgres sh -c "pg_isready" &>/dev/null; then
+        docker exec postgres \
+            pg_dump -U n8n -d n8n \
+        > "$BACKUP_PATH/n8n_postgres_dump_$DATE.sql" \
+        || { log ERROR "Postgres dump failed"; return 1; }
+        log INFO "Database dump saved to $BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
+    else
+        log ERROR "Postgres not ready"; return 1
+    fi
+
+	log INFO "Backing up .env and docker-compose.yml..."
+    cp "$N8N_DIR/.env" "$BACKUP_PATH/.env.bak"
+    cp "$N8N_DIR/docker-compose.yml" "$BACKUP_PATH/docker-compose.yml.bak"
+
+    log INFO "Compressing backup folder..."
+    BACKUP_FILE="n8n_backup_${N8N_VERSION}_${DATE}.tar.gz"
+    tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" .
+    log INFO "Created archive -> $BACKUP_FILE"
+
+	log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
+ 	rm -rf "$BACKUP_PATH"
+    find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+	find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -exec rmdir {} \;
+	log INFO "Removed any empty backup_<timestamp> folders"
+    set -e
+    return 0
+}
+
+################################################################################
+# upload_backup_rclone()
+#   Upload $BACKUP_FILE (and summary) to the rclone remote.
+#   Sets UPLOAD_STATUS="SUCCESS", "FAIL" or "SKIPPED".
+#   Returns 0 if SKIPPED or SUCCESS, 1 if FAIL.
+################################################################################
+upload_backup_rclone() {
+    # nothing to do if no remote configured
+    if [[ -z "$RCLONE_REMOTE" || -z "$RCLONE_TARGET" ]]; then
+        UPLOAD_STATUS="SKIPPED"
+        log INFO "Rclone remote or target not set; skipping upload."
+        return 0
+    fi
+
+    log INFO "Uploading $BACKUP_FILE and backup_summary.md to $RCLONE_REMOTE:$RCLONE_TARGET"
+    if \
+         rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs && \
+         rclone copy "$BACKUP_DIR/backup_summary.md" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs
+    then
+        UPLOAD_STATUS="SUCCESS"
+        log INFO "Uploaded both $BACKUP_FILE and backup_summary.md successfully!"
+        ret=0
+    else
+        UPLOAD_STATUS="FAIL"
+        log ERROR "One or more uploads failed"
+        ret=1
+    fi
+
+    log INFO "Pruning remote archives older than $DAYS_TO_KEEP days"
+    rclone delete --min-age "${DAYS_TO_KEEP}d" "$RCLONE_REMOTE:$RCLONE_TARGET" || \
+        log WARN "Failed to prune remote archives"
+
+    return $ret
+}
+
+################################################################################
+# send_mail_on_action()
+#   Sends a final notification email based on backup & upload results.
+#   Requires globals:
+#     BACKUP_STATUS     ("SUCCESS" / "FAIL" / "SKIPPED")
+#     UPLOAD_STATUS     ("SUCCESS" / "FAIL" / "SKIPPED")
+#     NOTIFY_ON_SUCCESS (boolean)
+################################################################################
+send_mail_on_action() {
+    local subject body
+
+    # 1) Determine subject/body based on statuses:
+    if [[ "$BACKUP_STATUS" == "FAIL" ]]; then
+        subject="$DATE: n8n Backup FAILED locally"
+        body="An error occurred during the local backup step. See attached log.
+
+Log File: $LOG_FILE"
+
+    elif [[ "$BACKUP_STATUS" == "SKIPPED" ]]; then
+        subject="$DATE: n8n Backup SKIPPED: no changes"
+        body="No changes detected since the last backup; nothing to do."
+
+    elif [[ "$BACKUP_STATUS" == "SUCCESS" && "$UPLOAD_STATUS" == "FAIL" ]]; then
+        subject="$DATE: n8n Backup Succeeded; upload FAILED"
+        body="Local backup succeeded as:
+
+  File: $BACKUP_FILE
+
+But the upload to $RCLONE_REMOTE:$RCLONE_TARGET failed.
+See log for details:
+
+Log File: $LOG_FILE"
+
+    elif [[ "$BACKUP_STATUS" == "SUCCESS" && "$UPLOAD_STATUS" == "SUCCESS" ]]; then
+        subject="$DATE: n8n Backup SUCCESS: $BACKUP_FILE"
+        body="Backup and upload completed successfully.
+
+  File:       $BACKUP_FILE
+  Remote:     $RCLONE_REMOTE:$RCLONE_TARGET
+  Drive Link: ${DRIVE_LINK:-N/A}"
+
+    else
+        subject="$DATE: n8n Backup status unknown"
+        body="Backup reported an unexpected status:
+  BACKUP_STATUS=$BACKUP_STATUS
+  UPLOAD_STATUS=$UPLOAD_STATUS
+See log at $LOG_FILE"
+    fi
+
+    # 2) Decide whether to send email:
+    #
+    # - On any failure (backup or upload), always send (with log attachment).
+    # - On success, only send if the user passed --notify-on-success.
+    #
+    if [[ "$BACKUP_STATUS" == "FAIL" ]] || [[ "$UPLOAD_STATUS" == "FAIL" ]]; then
+        # failures: attach the log
+        send_email "$subject" "$body" "$LOG_FILE"
+
+    elif [[ "$BACKUP_STATUS" == "SKIPPED" ]]; then
+        # skipped: only notify if explicitly requested
+        if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+            send_email "$subject" "$body"
+        fi
+
+    else
+        # success & upload success: only if notify-on-success
+        if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+            send_email "$subject" "$body"
+        fi
+    fi
+}
+
+################################################################################
+# print_summary()
+#   Print a human-readable summary of what just happened.
+################################################################################
+print_summary() {
+	local summary_file="$BACKUP_DIR/backup_summary.md"
+    local email_note
+	log INFO "Print a summary of what happened..."
+
+    # Determine whether an email was sent
+    if [[ "$BACKUP_STATUS" == "FAIL" ]] || [[ "$UPLOAD_STATUS" == "FAIL" ]] || [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+        email_note="Yes"
+    else
+        email_note="No"
+    fi
+
+    echo "═════════════════════════════════════════════════════════════"
+    printf "Action:               %s\n"   "$ACTION"
+    printf "Timestamp:            %s\n"   "$DATE"
+    printf "Domain:               https://%s\n" "$DOMAIN"
+    [[ -n "$BACKUP_FILE" ]] && printf "Backup file:          %s/%s\n" "$BACKUP_DIR" "$BACKUP_FILE"
+    printf "N8N Version:          %s\n"   "$N8N_VERSION"
+    printf "Log File:             %s\n"   "$LOG_FILE"
+    printf "Daily tracking:       %s\n"   "$summary_file"
+
+    case "$UPLOAD_STATUS" in
+        "SUCCESS")
+            printf "Uploaded to Google:   SUCCESS\n"
+            printf "Folder link:          %s\n" "$DRIVE_LINK"
+            ;;
+        "SKIPPED")
+            printf "Uploaded to Google:   SKIPPED\n"
+            ;;
+        *)
+            printf "Uploaded to Google:   FAILED\n"
+            ;;
+    esac
+
+    printf "Email notify sent:    %s\n" "$email_note"
+    echo "═════════════════════════════════════════════════════════════"
 }
 
 ################################################################################
@@ -249,110 +535,57 @@ get_folder_id() {
 # env file and docker-compose.yml
 ################################################################################
 backup_n8n() {
-    load_env
-    # Detect changes
-    if ! system_changed; then
-        log INFO "No changes since last backup; skipping."
+    N8N_VERSION=$(get_current_n8n_version)
+	BACKUP_STATUS=""
+	UPLOAD_STATUS=""
+	BACKUP_FILE=""
+	DRIVE_LINK=""
+
+	# Decide action type
+	if is_system_changed; then
+ 		ACTION="Backup (normal)"
+	elif [[ "$DO_FORCE" == true ]]; then
+        ACTION="Backup (forced)"
+    else
+        ACTION="Skipped"
+        BACKUP_STATUS="SKIPPED"
+        UPLOAD_STATUS="SKIPPED"
+        log INFO "No changes detected; skipping backup."
+        write_summary "$ACTION" "$BACKUP_STATUS"
+        send_mail_on_action
+        print_summary
         return 0
     fi
 
-	# Prepare backup	
- 	local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
-    mkdir -p "$BACKUP_PATH"
-
-    log INFO "Checking services running and healthy before starting backup..."
-    if ! check_services_up_running; then
-        log ERROR "Some services and Traefik are not running or unhealthy. Not starting the backup."
-        exit 1
+    # Local backup
+    if do_local_backup; then
+        BACKUP_STATUS="SUCCESS"
+        log INFO "Local backup succeeded: $BACKUP_FILE"
+		# Refresh our snapshot so next run sees “no changes”
+    	refresh_snapshot
     else
-       log INFO "Services running and healthy"
+        BACKUP_STATUS="FAIL"
+        log ERROR "Local backup failed."
+        UPLOAD_STATUS="SKIPPED"
+        write_summary "$ACTION" "$BACKUP_STATUS"
+        send_mail_on_action
+        print_summary
+        return 1
     fi
 
-    log INFO "Starting backup at $DATE..."
+    # Remote upload
+    upload_backup_rclone
+	# cache the Google Drive link exactly once
+	DRIVE_LINK=$(get_google_drive_link)
 
-    local N8N_VERSION=$(get_current_n8n_version)
+    # Record in rolling summary
+    write_summary "$ACTION" "$BACKUP_STATUS"
 
-    log INFO "Backing up Docker volumes..."
-    for vol in "${VOLUMES[@]}"; do
-        if docker volume inspect "$vol" >/dev/null 2>&1; then
-            local vol_backup="$BACKUP_PATH/volume_${vol}_$DATE.tar.gz"
-            docker run --rm -v "${vol}:/data" -v "$BACKUP_PATH:/backup" alpine \
-                sh -c "tar czf /backup/$(basename "$vol_backup") -C /data ."
-            log INFO "Volume '$vol' backed up: $vol_backup"
-        else
-            log ERROR "Volume $vol not found. Exiting..."
-            exit 1
-        fi
-    done
+    # Final email notification
+    send_mail_on_action
 
-    log INFO "Dumping PostgreSQL database..."
-    if docker exec postgres sh -c "pg_isready" >/dev/null 2>&1; then
-        docker exec postgres pg_dump -U n8n -d n8n > "$BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
-        log INFO "Database dump saved to $BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
-    else
-        log ERROR "PostgreSQL is not responding. Exiting..."
-        exit 1
-    fi
-
-    log INFO "Backing up .env and docker-compose.yml..."
-    cp "$N8N_DIR/.env" "$BACKUP_PATH/.env.bak"
-    cp "$N8N_DIR/docker-compose.yml" "$BACKUP_PATH/docker-compose.yml.bak"
-
-    log INFO "Compressing backup folder..."
-    local BACKUP_FILE="n8n_backup_${N8N_VERSION}_${DATE}.tar.gz"
-    tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" .
-    log INFO "Created archive -> $BACKUP_FILE"
- 	rm -rf "$BACKUP_PATH"
-
-    log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
-    find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
-
-	find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -exec rmdir {} \;
-	log INFO "Removed any empty backup_<timestamp> folders"
-
-    log INFO "Local backup completed..."
-    echo "═════════════════════════════════════════════════════════════"
-    echo "Domain:       https://${DOMAIN}"
-    echo "Backup file:  $BACKUP_DIR/$BACKUP_FILE"
-    echo "N8N Version:  $N8N_VERSION"
-    echo "Log File:     $LOG_FILE"
-    echo "Timestamp:    $DATE"
-    echo "═════════════════════════════════════════════════════════════"
-
-    # Cloud sync if remote & target provided
-    if [[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]]; then
-        log INFO "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET"
-        if ! rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs; then
-            log ERROR "Rclone upload failed"
-            send_email "Rclone Upload Failed" \
-                "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET failed." \
-                "$LOG_FILE"
-            exit 1
-        fi
-		FOLDER_ID=$(get_folder_id)
-  		if [[ -n "$FOLDER_ID" ]]; then
-    		log INFO "Browse your backups here: https://drive.google.com/drive/folders/$FOLDER_ID"
-  		else
-    		log WARN "Could not determine Google Drive folder ID for remote '$RCLONE_REMOTE'."
-  		fi
-        log INFO "Pruning remote archives older than $DAYS_TO_KEEP days"
-        rclone delete --min-age ${DAYS_TO_KEEP}d "$RCLONE_REMOTE:$RCLONE_TARGET"
-    fi
-
-    # Success notification
-    if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
-        send_email "n8n Backup Successful: $BACKUP_FILE" \
-                   "Backup completed: $BACKUP_FILE"
-    fi
-
-	# Update snapshot
-	log INFO "Updating snapshot to match this backup..."
-    for vol in "${VOLUMES[@]}"; do
-        rsync -a --delete "/var/lib/docker/volumes/${vol}/_data/" "$BACKUP_DIR/snapshot/volumes/${vol}/"
-    done
-    rsync -a --delete "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
-    rsync -a --delete "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
-	log INFO "Snapshot updated."
+    # Console summary
+    print_summary
 }
 
 ################################################################################
@@ -367,7 +600,7 @@ check_containers_healthy() {
     log INFO "Checking container status..."
 
     while [ $elapsed -lt $timeout ]; do
-        log INFO "Status check at $(date +"%H:%M:%S")..."
+        log INFO "Status check at $(date +%T)..."
         all_ok=true
         docker compose ps
         containers=$(docker ps -q)
@@ -493,23 +726,27 @@ check_services_up_running() {
 
 ################################################################################
 # restore_n8n()
-#   Restores Docker volumes, config, and database from a backup archive.
+#   Restores Docker volumes, config, and DB from a backup archive.
+#   Returns 0 on success, non-zero on failure.
 ################################################################################
 restore_n8n() {
     load_env
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
         log ERROR "Restore file not found: $TARGET_RESTORE_FILE"
-        exit 1
+        return 1
     fi
     log INFO "Starting restore at $DATE..."
     local restore_dir="/tmp/n8n_restore_$(date +%s)"
-    mkdir -p "$restore_dir"
+	mkdir -p "$restore_dir" || { log ERROR "Cannot create $restore_dir"; return 1; }
+ 
     log INFO "Extracting backup archive to $restore_dir"
-    tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir"
+	tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir" \
+      || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
 
     # Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
-    docker compose down --volumes --remove-orphans
+	docker compose down --volumes --remove-orphans \
+      || { log ERROR "docker-compose down failed"; return 1; }
 
     # Cleanup volumes to avoid DB conflict
     log INFO "Cleaning existing Docker volumes before restore..."
@@ -522,17 +759,19 @@ restore_n8n() {
     done
 
     # Restore Docker volumes
+	log INFO "Restoring volumes from archive..."
     for vol in n8n-data postgres-data letsencrypt; do
         local vol_file=$(find "$restore_dir" -name "*${vol}_*.tar.gz")
-        if [[ -n "$vol_file" ]]; then
-            log INFO "Restoring volume: $vol from $vol_file"
-            docker volume create "$vol" >/dev/null 2>&1 || true
-            docker run --rm -v "${vol}:/data" -v "${restore_dir}:/backup" alpine \
-                sh -c "rm -rf /data/* && tar xzf /backup/$(basename "$vol_file") -C /data"
-        else
-            log ERROR "Volume backup for $vol not found. Exiting..."
-            exit 1
+        if [[ -z "$vol_file" ]]; then
+            log ERROR "No backup found for volume $vol"
+            return 1
         fi
+
+  		docker volume create "$vol" &>/dev/null
+        docker run --rm -v "${vol}:/data" -v "$restore_dir:/backup" alpine \
+            sh -c "rm -rf /data/* && tar xzf /backup/$(basename "$vol_file") -C /data" \
+          || { log ERROR "Failed to restore $vol"; return 1; }
+        log INFO "Volume $vol restored"
     done
 
     # Restore .env and docker-compose.yml if present
@@ -549,11 +788,11 @@ restore_n8n() {
     # Restart services
     log INFO "Starting Docker Compose..."
     cd "$N8N_DIR" || { log ERROR "Failed to change directory to $N8N_DIR"; exit 1; }
-    docker compose up -d
+	docker compose up -d || { log ERROR "docker-compose up failed"; return 1; }
 
     if ! check_containers_healthy; then
         log ERROR "Some containers are not running or unhealthy. Stop restoration!"
-        exit 1
+        return 1
     fi
 
     # Restore Postgres SQL dump (if available)
@@ -570,7 +809,6 @@ restore_n8n() {
         log INFO "No Postgres SQL dump found. Assuming volume data is intact."
     fi
 
-
     log INFO "Checking services running and healthy after restoring backup..."
     if ! check_services_up_running; then
         log ERROR "Some services and Traefik are not running or unhealthy after restoring the backup"
@@ -584,7 +822,7 @@ restore_n8n() {
     # Cleanup temp
     rm -rf "$restore_dir"
 
-    local N8N_VERSION=$(get_current_n8n_version)
+    N8N_VERSION=$(get_current_n8n_version)
     log INFO "Restore completed successfully."
     echo "═════════════════════════════════════════════════════════════"
     echo "Domain:               https://${DOMAIN}"
@@ -599,7 +837,7 @@ restore_n8n() {
 
 ################################################################################
 # require_cmd(cmd)
-#   Exit with error if a required CLI is missing.
+#   Bail out early with an error if the given command is not installed.
 ################################################################################
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || { echo "[ERROR] Missing $1"; exit 1; }
@@ -684,14 +922,17 @@ load_env
 initialize_snapshot
 
 DATE=$(date +%F_%H-%M-%S)
-LOG_FILE="$LOG_DIR/$( [[ $DO_BACKUP == true ]] && echo backup || echo restore )_n8n_$DATE.log"
+mode="restore"
+[[ "$DO_BACKUP" == "true" ]] && mode="backup"
+LOG_FILE="$LOG_DIR/${mode}_n8n_$DATE.log"
+
 exec > >(tee "$LOG_FILE") 2>&1
 log INFO "Logging to $LOG_FILE"
 
-if [[ "$DO_BACKUP" == true ]]; then
-    backup_n8n
-elif [[ "$DO_RESTORE" == true ]]; then
-    restore_n8n
+if [[ "$DO_BACKUP" == "true" ]]; then
+    backup_n8n || exit 1
+elif [[ "$DO_RESTORE" == "true" ]]; then
+    restore_n8n || exit 1
 else
     usage
 fi
