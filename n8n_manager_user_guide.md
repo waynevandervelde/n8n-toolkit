@@ -4,7 +4,17 @@
 **Author:** TheNguyen  
 **Last Updated:** 2025-08-05  
 
-This guide walks non-technical users through installing, upgrading, and cleaning up the n8n automation platform using the `n8n_manager.sh` script.
+Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgrading, and cleaning up the n8n automation platform using Docker Compose. This guide is written for non‑technical users and walks you through all the steps and common scenarios.
+
+---
+
+## 📖 Introduction
+
+The **n8n Manager** script automates the entire lifecycle of your n8n deployment:
+
+- **Install**: Set up Docker, Docker Compose, SSL certificates, and launch n8n behind Traefik.
+- **Upgrade**: Pull the latest n8n image, migrate settings, and restart services.
+- **Cleanup**: Remove all containers, volumes, networks, and images to start fresh.
 
 ---
 
@@ -96,7 +106,7 @@ Completely remove n8n containers, volumes, and network:
 sudo ./n8n_manager.sh -c
 ```
 
-> ⚠️ This deletes **all** user data volumes. Use only if you want a full reset.
+> ⚠️ This stops all containers, prunes images, and deletes volumes & networks. Use only if you want a full reset.
 
 ---
 
@@ -113,14 +123,15 @@ sudo ./n8n_manager.sh -c
 
 ## ⚙️ Advanced Options
 
-- **Custom install directory:**
+- **Target Directory**: By default uses current folder. To change:
   ```bash
   sudo ./n8n_manager.sh -i n8n.example.com -d /opt/n8n
   ```
-- **Verbose (DEBUG) output:**
+- **Log Level** (DEBUG, INFO, WARN, ERROR):
   ```bash
   sudo ./n8n_manager.sh -i n8n.example.com -l DEBUG
   ```
+All logs write to `TARGET_DIR/logs/n8n_manager.log`.
 
 ---
 
@@ -139,4 +150,4 @@ sudo ./n8n_manager.sh -c
    sudo ufw status
    ```
 
-Happy automating with n8n! 🎉
+Thank you for using **n8n Manager**! If you encounter any issues, please open an issue on the GitHub repo or email [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com). 🎉
