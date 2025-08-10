@@ -34,7 +34,7 @@ This guide walks non-technical users through installing, upgrading, and cleaning
 
 1. **Download the Script**  
    ```bash
-   curl -LO https://github.com/thenguyenvn90/n8n/n8n_manager.sh && chmod +x n8n_manager.sh
+   curl -L -o n8n_manager.sh https://raw.githubusercontent.com/thenguyenvn90/n8n/main/n8n_manager.sh && chmod +x n8n_manager.sh
    ```
 
 2. **Run Help**  
