@@ -5,23 +5,28 @@ IFS=$'\n\t'
 
 #############################################################################################
 # N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
-# Author: TheNguyen
-# Email: thenguyen.ai.automation@gmail.com
-# Version: 1.1.0
-# Date: 2025-08-06
+# Author:      TheNguyen
+# Email:       thenguyen.ai.automation@gmail.com
+# Version:     1.2.0
+# Date:        2025-08-10
 #
 # Description:
-#   Provides backup and restore functionality for the n8n Docker stack.
-#   Supports optional email alerts and cloud backup sync.
+#   This script automates full backup and restore of an n8n Docker stack:
+#     • Backs up Docker volumes (n8n-data, postgres-data, letsencrypt)
+#     • Dumps the PostgreSQL database
+#     • Archives .env and docker-compose.yml
+#     • Detects changes to avoid redundant backups (unless --force)
+#     • Optionally syncs backups to Google Drive via rclone
+#     • Sends failure/success notifications over Gmail SMTP (msmtp)
 #############################################################################################
 
 # === Default Configuration ===
-CONTAINERS=("n8n" "postgres" "traefik")
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
 DAYS_TO_KEEP=7
 
 DO_BACKUP=false
 DO_RESTORE=false
+DO_FORCE=false
 TARGET_RESTORE_FILE=""
 LOG_LEVEL="INFO"
 EMAIL_TO=""
@@ -38,9 +43,10 @@ LOG_DIR=""
 DATE=""
 LOG_FILE=""
 
-trap 'handle_error' ERR
-
-# Log function with log level filtering
+################################################################################
+# log(level, message...)
+#   Print a log line if level >= LOG_LEVEL.
+################################################################################
 log() {
     local level="$1"; shift
     local levels=("DEBUG" "INFO" "WARN" "ERROR")
@@ -58,7 +64,10 @@ log() {
     fi
 }
 
-# Load .env file
+################################################################################
+# load_env()
+#   Source .env for DOMAIN and other variables, exiting if missing.
+################################################################################
 load_env() {
     if [[ -f ".env" ]]; then
         set -o allexport
@@ -75,47 +84,43 @@ load_env() {
     fi
 }
 
-# ------------------------------
-# Email via msmtp
-# ------------------------------
+################################################################################
+# send_email(subject, body[, attachment])
+#   Send an email via Gmail SMTP using msmtp.
+################################################################################
 send_email() {
-	local subject="$1"
-	local body="$2"
-	local attachment="${3:-}"
-
-	if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" ]]; then
-		log WARN "SMTP_USER or SMTP_PASS not set; skipping email."
-	return
-	fi
-	if [[ -z "$EMAIL_TO" ]]; then
-		log WARN "EMAIL_TO not set; skipping email."
-	return
-	fi
-
-	{
-	echo "Subject: $subject"
-	echo "To: $EMAIL_TO"
-	echo
-	echo "$body"
-	if [[ -n "$attachment" && -f "$attachment" ]]; then
-		echo
-		echo "--ATTACHMENT--"
-		base64 "$attachment"
-		echo "--END ATTACHMENT--"
-	fi
-	} | msmtp --host=smtp.gmail.com \
-			--port=587 \
-			--auth=on \
-			--tls=on \
-			--from="$SMTP_USER" \
-			--user="$SMTP_USER" \
-			--passwordeval="echo $SMTP_PASS" \
-			"$EMAIL_TO" \
-	&& log INFO "Email sent: $subject" \
-	|| log WARN "Failed to send email: $subject"
+    local subject="$1" body="$2" attachment="${3:-}"
+    if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
+        log WARN "SMTP_USER, SMTP_PASS or EMAIL_TO not set; cannot send email."
+        return
+    fi
+    {
+        echo "Subject: $subject"
+        echo "To: $EMAIL_TO"
+        echo
+        echo "$body"
+        if [[ -n "$attachment" && -f "$attachment" ]]; then
+            echo
+            echo "--ATTACHMENT--"
+            base64 "$attachment"
+            echo "--END ATTACHMENT--"
+        fi
+    } | msmtp --host=smtp.gmail.com \
+              --port=587 \
+              --auth=on \
+              --tls=on \
+              --from="$SMTP_USER" \
+              --user="$SMTP_USER" \
+              --passwordeval="echo $SMTP_PASS" \
+              "$EMAIL_TO" \
+        && log INFO "Email sent: $subject" \
+        || log WARN "Failed to send email: $subject"
 }
 
-# Handle errors
+################################################################################
+# handle_error()
+#   Trap for any uncaught error: logs, sends failure email, and exits.
+################################################################################
 handle_error() {
   log ERROR "Backup/Restore encountered an error. See log: $LOG_FILE"
   send_email "n8n Backup/Restore Error at $DATE" \
@@ -124,13 +129,17 @@ handle_error() {
   exit 1
 }
 
-# ------------------------------
-# Usage
-# ------------------------------
+trap 'handle_error' ERR
+
+################################################################################
+# usage()
+#   Print script usage/help and exit.
+################################################################################
 usage() {
   cat <<EOF
 Usage: $0 [OPTIONS]
   -b, --backup               Perform backup
+  -f, --force                Force backup even if no changes detected
   -r, --restore <FILE>       Restore from backup file
   -d, --dir <DIR>            n8n base directory (default: current)
   -l, --log-level <LEVEL>    DEBUG, INFO (default), WARN, ERROR
@@ -142,12 +151,82 @@ Usage: $0 [OPTIONS]
 EOF
   exit 0
 }
-# Returns the currently running version of n8n from the Docker container
+
+################################################################################
+# initialize_snapshot()
+#   On first run, mirror live volumes & config into snapshot/ for change checks.
+################################################################################
+initialize_snapshot() {
+    if [[ ! -d "$BACKUP_DIR/snapshot" ]]; then
+        log INFO "Bootstrapping snapshot (first run)…"
+        for vol in "${VOLUMES[@]}"; do
+            mkdir -p "$BACKUP_DIR/snapshot/volumes/$vol"
+            rsync -a "/var/lib/docker/volumes/${vol}/_data/" \
+                  "$BACKUP_DIR/snapshot/volumes/$vol/"
+        done
+        mkdir -p "$BACKUP_DIR/snapshot/config"
+        rsync -a "$N8N_DIR/.env"              "$BACKUP_DIR/snapshot/config/"
+        rsync -a "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
+        log INFO "Snapshot bootstrapped."
+    fi
+}
+
+################################################################################
+# system_changed()
+#   Returns 0 if any new/modified file exists compared to snapshot, or if forced.
+################################################################################
+# Returns 0 if any new or modified file is found (or forced), 1 otherwise
+system_changed() {
+    [[ "$DO_FORCE" == true ]] && return 0
+    local changed=0
+
+    for vol in "${VOLUMES[@]}"; do
+        local src="/var/lib/docker/volumes/${vol}/_data/"
+        local dest="$BACKUP_DIR/snapshot/volumes/${vol}/"
+        mkdir -p "$dest"
+        # dry-run: list items; filter out dirs (ending with '/')
+        local diffs
+        diffs=$(rsync -rtun --out-format="%n" "$src" "$dest" \
+                | grep -v '/$') || true
+
+        if [[ -n "$diffs" ]]; then
+            log INFO "Change detected in volume: $vol"
+            log DEBUG "Changed files:\n$diffs"
+            changed=1
+            break
+        fi
+    done
+
+    if [[ $changed -eq 0 ]]; then
+        local dest_cfg="$BACKUP_DIR/snapshot/config/"
+        for file in .env docker-compose.yml; do
+            local diffs
+            diffs=$(rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest_cfg" \
+                    | grep -v '/$') || true
+            if [[ -n "$diffs" ]]; then
+                log INFO "Change detected in config: $file"
+                log DEBUG "Changed config lines:\n$diffs"
+                changed=1
+                break
+            fi
+        done
+    fi
+
+    (( changed == 1 ))
+}
+
+################################################################################
+# get_current_n8n_version()
+#   Returns the version of n8n running in the Docker container.
+################################################################################
 get_current_n8n_version() {
     docker exec n8n n8n --version 2>/dev/null
 }
 
-# === Helper: get root_folder_id from rclone config ===
+################################################################################
+# get_folder_id()
+#   Extracts root_folder_id from rclone config for later Drive URL.
+################################################################################
 get_folder_id() {
   # Pull the 'root_folder_id' value from your remote's section in ~/.config/rclone/rclone.conf
   rclone config show "$RCLONE_REMOTE" \
@@ -155,7 +234,9 @@ get_folder_id() {
     | sed -E 's/^root_folder_id *= *//'
 }
 
-# Perform backup of Docker volumes and Postgres
+################################################################################
+# backup_n8n()
+#   Main backup workflow: health check, dump volumes & DB, archive, sync, notify.
 # For a Docker-based n8n installation, here’s exactly what you need to back up to ensure full recovery:
 # n8n-data, postgres-data, and letsencrypt volumes
 # SQL dump of PostgreSQL database
@@ -166,10 +247,17 @@ get_folder_id() {
 # postgres-data:	Stores the Postgres database used by n8n.
 #    docker exec postgres pg_dump -U n8n -d n8n > "$BACKUP_DIR/n8n_db_dump.sql"
 # env file and docker-compose.yml
-
+################################################################################
 backup_n8n() {
     load_env
-    local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
+    # Detect changes
+    if ! system_changed; then
+        log INFO "No changes since last backup; skipping."
+        return 0
+    fi
+
+	# Prepare backup	
+ 	local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
     mkdir -p "$BACKUP_PATH"
 
     log INFO "Checking services running and healthy before starting backup..."
@@ -214,11 +302,13 @@ backup_n8n() {
     local BACKUP_FILE="n8n_backup_${N8N_VERSION}_${DATE}.tar.gz"
     tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" .
     log INFO "Created archive -> $BACKUP_FILE"
-    rm -rf "$BACKUP_PATH"
+ 	rm -rf "$BACKUP_PATH"
 
     log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
     find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
-    log INFO "Local cleanup completed."
+
+	find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -exec rmdir {} \;
+	log INFO "Removed any empty backup_<timestamp> folders"
 
     log INFO "Local backup completed..."
     echo "═════════════════════════════════════════════════════════════"
@@ -239,12 +329,12 @@ backup_n8n() {
                 "$LOG_FILE"
             exit 1
         fi
-        FOLDER_ID="$(get_folder_id)"
-        if [[ -n "$FOLDER_ID" ]]; then
-            echo
-            log INFO "Browse your backups here:"
-            echo "https://drive.google.com/drive/folders/$FOLDER_ID"
-        fi
+		FOLDER_ID=$(get_folder_id)
+  		if [[ -n "$FOLDER_ID" ]]; then
+    		log INFO "Browse your backups here: https://drive.google.com/drive/folders/$FOLDER_ID"
+  		else
+    		log WARN "Could not determine Google Drive folder ID for remote '$RCLONE_REMOTE'."
+  		fi
         log INFO "Pruning remote archives older than $DAYS_TO_KEEP days"
         rclone delete --min-age ${DAYS_TO_KEEP}d "$RCLONE_REMOTE:$RCLONE_TARGET"
     fi
@@ -254,9 +344,21 @@ backup_n8n() {
         send_email "n8n Backup Successful: $BACKUP_FILE" \
                    "Backup completed: $BACKUP_FILE"
     fi
+
+	# Update snapshot
+	log INFO "Updating snapshot to match this backup..."
+    for vol in "${VOLUMES[@]}"; do
+        rsync -a --delete "/var/lib/docker/volumes/${vol}/_data/" "$BACKUP_DIR/snapshot/volumes/${vol}/"
+    done
+    rsync -a --delete "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
+    rsync -a --delete "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
+	log INFO "Snapshot updated."
 }
 
-# Waits for all containers to reach a healthy state within a timeout window
+################################################################################
+# check_containers_healthy()
+#   Polls defined containers until they’re all running & healthy (or times out).
+################################################################################
 check_containers_healthy() {
     timeout=180
     interval=10
@@ -304,7 +406,10 @@ check_containers_healthy() {
     return 1
 }
 
-# Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
+################################################################################
+# verify_traefik_certificate()
+#   Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
+################################################################################
 verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
     local MAX_RETRIES=3
@@ -369,7 +474,10 @@ verify_traefik_certificate() {
     return 1
 }
 
-# Combines container health and certificate checks to confirm stack is operational
+################################################################################
+# check_services_up_running()
+#   Combines container health and certificate checks to confirm stack is operational
+################################################################################
 check_services_up_running() {
     if ! check_containers_healthy; then
         log ERROR "Some containers are not running or unhealthy. Please check the logs above."
@@ -383,7 +491,10 @@ check_services_up_running() {
     return 0
 }
 
-# Restores volumes and PostgreSQL database from a given backup archive
+################################################################################
+# restore_n8n()
+#   Restores Docker volumes, config, and database from a backup archive.
+################################################################################
 restore_n8n() {
     load_env
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
@@ -486,8 +597,23 @@ restore_n8n() {
     echo "═════════════════════════════════════════════════════════════"
 }
 
+################################################################################
+# require_cmd(cmd)
+#   Exit with error if a required CLI is missing.
+################################################################################
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || { echo "[ERROR] Missing $1"; exit 1; }
+}
+
+# Ensure we have everything we need
+require_cmd docker
+require_cmd rsync
+require_cmd tar
+require_cmd msmtp
+require_cmd rclone
+
 # === Argument Parsing (long & short) ===
-TEMP=$(getopt -o br:d:l:e:s:t:nh --long backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
+TEMP=$(getopt -o fbr:d:l:e:s:t:nh --long force,backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
 eval set -- "$TEMP"
 
 while true; do
@@ -497,13 +623,17 @@ while true; do
             DO_BACKUP=true
             shift
             ;;
+		-f|--force)
+  			DO_FORCE=true
+	 		shift
+			;;
         -r|--restore)
             DO_RESTORE=true
             TARGET_RESTORE_FILE="$2"
             shift 2
             ;;
         -d|--dir)
-            TARGET_DIR="$2"
+            N8N_DIR="$2"
             shift 2
             ;;
         -l|--log-level)
@@ -511,7 +641,6 @@ while true; do
             shift 2
             ;;
         -e|--email)
-            SEND_EMAIL=true
             EMAIL_TO="$2"
             shift 2
             ;;
@@ -540,12 +669,20 @@ while true; do
     esac
 done
 
-# === Execution Logic ===
-N8N_DIR="${TARGET_DIR:-$PWD}"
+################################################################################
+# Main Execution
+################################################################################
+# Initialize directories & logging
+N8N_DIR="${N8N_DIR:-$PWD}"
 BACKUP_DIR="$N8N_DIR/backups"
 LOG_DIR="$N8N_DIR/logs"
 log INFO "Working on directory: $N8N_DIR"
-mkdir -p "$BACKUP_DIR" "$LOG_DIR"
+mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$BACKUP_DIR/snapshot/volumes" "$BACKUP_DIR/snapshot/config"
+
+# Load DOMAIN from .env (needed by initialize_snapshot)
+load_env
+initialize_snapshot
+
 DATE=$(date +%F_%H-%M-%S)
 LOG_FILE="$LOG_DIR/$( [[ $DO_BACKUP == true ]] && echo backup || echo restore )_n8n_$DATE.log"
 exec > >(tee "$LOG_FILE") 2>&1
@@ -560,6 +697,8 @@ else
 fi
 
 log INFO "Cleaning up local logs older than $DAYS_TO_KEEP days..."
-find "$LOG_DIR" -type f -name "backup_n8n_*.log" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
-find "$LOG_DIR" -type f -name "restore_n8n_*.log" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+find "$BACKUP_DIR/snapshot/volumes" -type d -empty -delete
+find "$BACKUP_DIR/snapshot/config" -type f -empty -delete
+find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -delete
+find "$LOG_DIR" -type f -mtime +$DAYS_TO_KEEP -delete
 log INFO "Local cleanup logs completed."
