@@ -87,32 +87,63 @@ load_env() {
 #   Send an email via Gmail SMTP using msmtp.
 ################################################################################
 send_email() {
-    local subject="$1" body="$2" attachment="${3:-}"
-    if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
-        log WARN "SMTP_USER, SMTP_PASS or EMAIL_TO not set; cannot send email."
-        return
+  local subject="$1"
+  local body="$2"
+  local attachment="${3:-}"
+
+  # Bail if any required creds/recipients are missing
+  if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
+    log WARN "SMTP_USER, SMTP_PASS, or EMAIL_TO not set; cannot send email."
+    return 1
+  fi
+
+  # Generate a random boundary
+  local boundary="=====n8n_backup_$(date +%s)_$$====="
+  {
+    # Standard headers
+    echo "From: $SMTP_USER"
+    echo "To: $EMAIL_TO"
+    echo "Subject: $subject"
+    echo "MIME-Version: 1.0"
+    echo "Content-Type: multipart/mixed; boundary=\"$boundary\""
+    echo
+    echo "--$boundary"
+    echo "Content-Type: text/plain; charset=UTF-8"
+    echo "Content-Transfer-Encoding: 7bit"
+    echo
+    echo "$body"
+    echo
+
+    # If we have an attachment, embed it properly
+    if [[ -n "$attachment" && -f "$attachment" ]]; then
+      local filename
+      filename=$(basename "$attachment")
+      echo "--$boundary"
+      echo "Content-Type: application/octet-stream; name=\"$filename\""
+      echo "Content-Transfer-Encoding: base64"
+      echo "Content-Disposition: attachment; filename=\"$filename\""
+      echo
+      base64 "$attachment"
+      echo
     fi
-    {
-        echo "Subject: $subject"
-        echo "To: $EMAIL_TO"
-        echo
-        echo "$body"
-        if [[ -n "$attachment" && -f "$attachment" ]]; then
-            echo
-            echo "--ATTACHMENT--"
-            base64 "$attachment"
-            echo "--END ATTACHMENT--"
-        fi
-    } | msmtp --host=smtp.gmail.com \
-              --port=587 \
-              --auth=on \
-              --tls=on \
-              --from="$SMTP_USER" \
-              --user="$SMTP_USER" \
-              --passwordeval="echo $SMTP_PASS" \
-              "$EMAIL_TO" \
-        && log INFO "Email sent: $subject" \
-        || log WARN "Failed to send email: $subject"
+
+    # End of multipart
+    echo "--$boundary--"
+  } | msmtp \
+      --host=smtp.gmail.com \
+      --port=587 \
+      --auth=on \
+      --tls=on \
+      --from="$SMTP_USER" \
+      --user="$SMTP_USER" \
+      --passwordeval="echo $SMTP_PASS" \
+      "$EMAIL_TO"
+
+  if [[ $? -eq 0 ]]; then
+    log INFO "Email sent: $subject"
+  else
+    log WARN "Failed to send email: $subject"
+  fi
 }
 
 ################################################################################
@@ -217,7 +248,7 @@ is_system_changed() {
 
         if [[ -n "$diffs" ]]; then
             log INFO "Change detected in volume: $vol"
-            log INFO "  $diffs"
+            log DEBUG "  $diffs"
             return 0
         fi
     done
@@ -228,7 +259,7 @@ is_system_changed() {
         diffs=$(rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest" | grep -v '/$') || true
         if [[ -n "$diffs" ]]; then
             log INFO "Change detected in config: $file"
-            log INFO "  $diffs"
+            log DEBUG "  $diffs"
             return 0
         fi
     done
@@ -279,7 +310,7 @@ write_summary() {
     local action="$1" status="$2"
 	local version="$N8N_VERSION"
     local file="$BACKUP_DIR/backup_summary.md"
-    local now; now=$(date '+%F_%H-%M-%S')
+    local now; now="$DATE"
     local cutoff; cutoff=$(date -d '30 days ago' '+%F')
 
     # If the file doesn't exist, write the markdown table header
@@ -385,10 +416,10 @@ upload_backup_rclone() {
         return 0
     fi
 
-    log INFO "Uploading $BACKUP_FILE and backup_summary.md to $RCLONE_REMOTE:$RCLONE_TARGET"
+    log INFO "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET"
     if \
-         rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs && \
-         rclone copy "$BACKUP_DIR/backup_summary.md" "$RCLONE_REMOTE:$RCLONE_TARGET" --create-dirs
+         rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" && \
+         rclone copy "$BACKUP_DIR/backup_summary.md" "$RCLONE_REMOTE:$RCLONE_TARGET"
     then
         UPLOAD_STATUS="SUCCESS"
         log INFO "Uploaded both $BACKUP_FILE and backup_summary.md successfully!"
@@ -440,11 +471,11 @@ See log for details:
 Log File: $LOG_FILE"
 
     elif [[ "$BACKUP_STATUS" == "SUCCESS" && "$UPLOAD_STATUS" == "SUCCESS" ]]; then
-        subject="$DATE: n8n Backup SUCCESS: $BACKUP_FILE"
+        subject="$DATE: n8n Backup SUCCESS"
         body="Backup and upload completed successfully.
 
-  File:       $BACKUP_FILE
-  Remote:     $RCLONE_REMOTE:$RCLONE_TARGET
+  File: $BACKUP_FILE
+  Remote: $RCLONE_REMOTE:$RCLONE_TARGET
   Drive Link: ${DRIVE_LINK:-N/A}"
 
     else
@@ -473,7 +504,8 @@ See log at $LOG_FILE"
     else
         # success & upload success: only if notify-on-success
         if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
-            send_email "$subject" "$body"
+            # send_email "$subject" "$body"
+			send_email "$subject" "$body" "$LOG_FILE"
         fi
     fi
 }
@@ -573,13 +605,14 @@ backup_n8n() {
         return 1
     fi
 
-    # Remote upload
-    upload_backup_rclone
-	# cache the Google Drive link exactly once
-	DRIVE_LINK=$(get_google_drive_link)
-
     # Record in rolling summary
     write_summary "$ACTION" "$BACKUP_STATUS"
+
+	# Remote upload
+    upload_backup_rclone
+
+	# cache the Google Drive link exactly once
+	DRIVE_LINK=$(get_google_drive_link)
 
     # Final email notification
     send_mail_on_action
