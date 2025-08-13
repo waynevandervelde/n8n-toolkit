@@ -18,6 +18,21 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 ---
 
+## 🚀 Features
+
+1. **Domain Validation**: Checks that your chosen domain or sub‑domain resolves to this server’s IP.
+2. **Docker & Compose Installer**: Automatically installs/removes any old Docker versions and pulls in Docker Engine & Compose v2.
+3. **Persistent Volumes**: Creates `n8n-data`, `postgres-data`, and `letsencrypt` volumes.
+4. **SSL Certificates**: Prompts for your email and obtains Let’s Encrypt certs via Traefik (or accept `-m you@example.com`).
+5. **Health Checks**: Waits for containers to report “healthy” before completing and validates HTTPS/certificate.
+6. **Upgrades**: Pulls the correct image tag and safely redeploys the stack.
+7. **Version Pinning (`-v`)**: Install or upgrade to an exact n8n version (e.g., `-v 1.106.3`), or omit to use latest stable.
+8. **Force Mode (`-f`)**: Redeploy even if versions match; also required to **downgrade** safely.
+9. **Cleanup Mode**: Stops/removes everything—containers, images, volumes, and networks.
+10. **Logging**: Writes a detailed log to `logs/n8n_manager.log` in your install directory.
+
+---
+
 ## 📋 Prerequisites
 
 1. **Linux Server**  
@@ -53,26 +68,33 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    ```bash
    sudo ./n8n_manager.sh -h
    ```
-   You should see usage instructions../
-   ```
-   root@ubuntu-s-1vcpu-1gb-01://n8n-main# ./n8n_manager.sh -h
-   Usage: ./n8n_manager.sh [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h
-     ./n8n_manager.sh -i <DOMAIN>         Install n8n stack
-     ./n8n_manager.sh -u <DOMAIN> [-f]    Upgrade n8n stack (optionally force) to the latest version
-     ./n8n_manager.sh -c                  Cleanup all containers, volumes, and network
-     ./n8n_manager.sh -d <TARGET_DIR>     Target install directory (default: /root/n8n-main)
-     ./n8n_manager.sh -l                  Set log level: DEBUG, INFO (default), WARN, ERROR
-     ./n8n_manager.sh -h                  Show script usage
+   CLI quick reference (most‑used flags)../
+  ```bash
+   Usage: ./n8n_manager.sh [-i DOMAIN] [-u DOMAIN] [-v VERSION] [-m EMAIL] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h
+     -i <DOMAIN>         Install n8n stack
+     -u <DOMAIN>         Upgrade n8n stack
+     -v <VERSION>        Pin n8n version (e.g. 1.106.3). Omit or use 'latest' for latest stable
+     -m <EMAIL>          Provide SSL email non‑interactively (skips prompt)
+     -f                  Force redeploy / allow downgrade
+     -c                  Cleanup all containers, volumes, network
+     -d <DIR>            Install directory (default: current)
+     -l <LEVEL>          Log level: DEBUG|INFO|WARN|ERROR
+     -h                  Help
    ```
 ---
 
-## 🔧 Install n8n
+## 🔧 Installation Flow
 
+1. Install n8n
+
+Interactive email prompt:
 ```bash
-sudo ./n8n_manager.sh -i n8n.YourDomain.com
+sudo ./n8n_manager.sh -i n8n.YourDomain.com (install the latest n8n version)
+or
+sudo ./n8n_manager.sh -i n8n.YourDomain.com -v  1.105.3 (install the version 1.105.3)
 ```
 
-1. When prompted, enter your email (used for SSL).
+When prompted, enter your email (used for SSL).
 ```
    root@ubuntu-s-1vcpu-1gb-01:~/n8n-main# ./n8n_manager.sh -i n8n.YourDomain.com
    [INFO] Working on directory: /root/n8n-main
@@ -80,14 +102,23 @@ sudo ./n8n_manager.sh -i n8n.YourDomain.com
    [INFO] Starting N8N installation for domain: n8n.YourDomain.com
    Enter your email address (used for SSL cert): yourValidEmail@gmail.com
 ```
-2. The script will:
-   - Verify your DNS record
-   - Install Docker & Docker Compose if needed
-   - Create required Docker volumes
-   - Generate a strong password and update `.env`
-   - Start the n8n Docker stack
 
-3. On success, you’ll see:
+Or provide your SSL email inline (no prompt)
+
+```bash
+sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com
+```
+2. Installation Flow
+
+The script will:
+   1. **Enter your email** for SSL notifications (if the argument -m was not specified)
+   2. **Verify DNS**: script confirms your domain points at this server.
+   3. **Copy and configure** `docker-compose.yml` and `.env` with your domain, email, and password.
+   4. **Install Docker & Compose** if missing.
+   5. **Create volumes** and start the stack behind Traefik.
+   6. **Wait for health checks** to pass.
+
+At the end, you’ll see a summary with your URL, version, and log file path.
    ```
    ─────────────────────────────────────────────────────────
    N8N has been successfully installed!
@@ -100,32 +131,28 @@ sudo ./n8n_manager.sh -i n8n.YourDomain.com
    Execution log:      /root/n8n-main/logs/n8n_manager.log
    ─────────────────────────────────────────────────────────
    ```
-
 ---
 
 ## 🔄 Upgrade n8n
 
-Pull and deploy the latest n8n release:
+**Latest stable:**
 
 ```bash
 sudo ./n8n_manager.sh -u n8n.YourDomain.com
 ```
 
-- If already up-to-date, the script reports it.
-  ```
-   root@ubuntu-s-1vcpu-1gb-sgp1-01:/root/n8n-main# ./n8n_manager.sh -u n8n-test.YourDomain.com
-   [INFO] Working on directory: /root/n8n-main
-   [INFO] Logging to /root/n8n-main/logs/n8n_manager.log
-   [INFO] Checking current and latest n8n versions...
-   [INFO] Current version: 1.106.3
-   [INFO] Latest version:  1.106.3
-   [INFO] You are already running the latest version (1.106.3). Use -f to force upgrade.
-  ```
-- To force an upgrade even if on the latest version, add `-f`:
+**Pin a specific version:** (installs/upgrades to exactly this tag and writes it to `.env` as `N8N_IMAGE_TAG`)
 
-  ```bash
-  sudo ./n8n_manager.sh -u -f n8n.YourDomain.com
-  ```
+```bash
+sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.106.3
+```
+
+**Downgrade:** (requires `-f` to proceed)
+
+```bash
+sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
+```
+
 - On success, you’ll see:
   ```
    ─────────────────────────────────────────────────────────
@@ -139,11 +166,17 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com
    Execution log:      /root/n8n-main/logs/n8n_manager.log
    ─────────────────────────────────────────────────────────
   ```
+
+**Notes:**
+- If you **omit `-v`** (or pass `latest`), the script resolves the latest stable tag and updates `.env` to that version.
+- If you **pass `-v <version>`**, the script validates the tag, pins it in `.env`, and deploys that exact version.
+- A later `-u` **without `-v`** will switch you back to the latest stable.
+
 ---
 
 ## 🧹 Cleanup (Uninstall)
 
-Completely remove n8n containers, volumes, and network:
+If you need to completely remove n8n and start over:
 
 ```bash
 sudo ./n8n_manager.sh -c
