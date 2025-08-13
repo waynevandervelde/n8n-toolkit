@@ -287,10 +287,10 @@ get_current_n8n_version() {
 
 # Fetches the latest stable n8n version tag from Docker Hub
 get_latest_n8n_version() {
-    curl -s https://hub.docker.com/v2/repositories/n8nio/n8n/tags \
-    | jq -r '.results[].name' \
-    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -Vr | head -n 1
+  curl -fsSL 'https://hub.docker.com/v2/repositories/n8nio/n8n/tags?page_size=100' \
+  | jq -r '.results[].name' \
+  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+  | sort -Vr | head -n 1
 }
 
 # Creates all Docker volumes required by the n8n stack if they don't already exist
@@ -477,19 +477,30 @@ install_n8n() {
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
     cd "$N8N_DIR"
-    current_version=$(get_current_n8n_version)
+    current_version=$(get_current_n8n_version || echo "0.0.0")
     latest_version=$(get_latest_n8n_version)
+    if [[ -z "$latest_version" ]]; then
+        log ERROR "Could not determine latest n8n tag."
+        exit 1
+    fi
 
     log INFO "Current version: $current_version"
     log INFO "Latest version:  $latest_version"
 
     if [[ "$(echo -e "$latest_version\n$current_version" | sort -V | head -n1)" == "$latest_version" && "$FORCE_UPGRADE" != true ]]; then
-    log INFO "You are already running the latest version ($latest_version). Use -f to force upgrade."
-    exit 0
+        log INFO "You are already running the latest version ($latest_version). Use -f to force upgrade."
+        exit 0
     fi
 
-    log INFO "Pulling latest image..."
-    docker pull n8nio/n8n:$latest_version
+    # Write/pin the tag into .env
+    if grep -q '^N8N_IMAGE_TAG=' "$N8N_DIR/.env"; then
+        sed -i "s/^N8N_IMAGE_TAG=.*/N8N_IMAGE_TAG=$latest_version/" "$N8N_DIR/.env"
+    else
+        echo "N8N_IMAGE_TAG=$latest_version" >> "$N8N_DIR/.env"
+    fi
+
+    log INFO "Pulling n8nio/n8n:$latest_version and redeploying…"
+    docker compose pull n8n
 
     log INFO "Stopping and removing existing containers..."
     docker compose down
