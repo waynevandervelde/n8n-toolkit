@@ -23,6 +23,8 @@ IFS=$'\n\t'
 # Usage:
 #   ./n8n_manager.sh -i <DOMAIN> [-l INFO|DEBUG]    # Install n8n with specified domain
 #   ./n8n_manager.sh -u <DOMAIN>                    # Upgrade n8n with specified domain
+#   ./n8n_manager.sh -v <N8N_VERSION>               # Pin n8n version (e.g. 1.106.3). If omitted/empty, use latest-stable
+#   ./n8n_manager.sh -m <SSL_EMAIL>                 # Enter your email address (used for SSL cert)
 #   ./n8n_manager.sh -d <TARGET_DIR>                # Target install directory (default: ${PWD})
 #   ./n8n_manager.sh -u -f <DOMAIN>                 # Force upgrade n8n
 #   ./n8n_manager.sh -c                             # Cleanup n8n containers and volumes
@@ -46,6 +48,7 @@ CLEANUP=false
 FORCE_UPGRADE=false
 LOG_LEVEL="INFO"
 TARGET_DIR=""
+N8N_VERSION="latest"
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
 
 # Handles conditional logging based on the defined log level (DEBUG, INFO, WARN, ERROR)
@@ -69,9 +72,11 @@ log() {
 
 # Displays script usage/help information when incorrect or no arguments are passed
 usage() {
-    echo "Usage: $0 [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h"
+    echo "Usage: $0 [-i DOMAIN] [-v VERSION] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h"
     echo "  $0 -i <DOMAIN>         Install n8n stack"
     echo "  $0 -u <DOMAIN> [-f]    Upgrade n8n stack (optionally force)"
+    echo "  $0 -v <N8N_VERSION>    Pin n8n version (e.g. 1.106.3). If omitted/empty, use latest-stable"
+    echo "  $0 -m <SSL_EMAIL>      Enter your email address (used for SSL cert in the installation)"
     echo "  $0 -c                  Cleanup all containers, volumes, and network"
     echo "  $0 -d <TARGET_DIR>     Target install directory (default: $PWD)"
     echo "  $0 -l                  Set log level: DEBUG, INFO (default), WARN, ERROR"
@@ -89,19 +94,32 @@ check_root() {
 
 # Validates that the provided domain points to the current server's public IP
 check_domain() {
-    local server_ip=$(curl -s https://api.ipify.org || curl -s https://ifconfig.me || echo "Unavailable")
-    local domain_ip=$(dig +short $DOMAIN)
+    local server_ip domain_ips
+    server_ip=$(curl -s https://api.ipify.org || echo "Unavailable")
+    # Resolve any CNAMEs, keep only IPv4s
+    domain_ips=$(dig +short "$DOMAIN" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ')
     log INFO "Your server's public IP is: $server_ip"
-    log INFO "Domain $DOMAIN currently resolves to: $domain_ip"
-    if [ "$domain_ip" = "$server_ip" ]; then
+    log INFO "Domain $DOMAIN currently resolves to: $domain_ips"
+    if echo "$domain_ips" | tr ' ' '\n' | grep -Fxq "$server_ip"; then
         log INFO "Domain $DOMAIN is correctly pointing to this server."
     else
         log ERROR "Domain $DOMAIN is NOT pointing to this server."
-        log INFO "Please update your DNS record to point to: $(curl -s https://api.ipify.org)"
+        log INFO  "Please update your DNS A record to: $server_ip"
         exit 1
     fi
 }
 
+
+# Safely add/update a KEY=VALUE in an .env file
+upsert_env_var() {
+    local key="$1" val="$2" file="$3"
+    if grep -qE "^${key}=" "$file"; then
+        sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    else
+        printf "\n%s=%s\n" "$key" "$val" >> "$file"
+    fi
+}
+   
 # Prompts the user to input a valid email address for SSL certificate generation
 get_user_email() {
     while true; do
@@ -122,43 +140,69 @@ prepare_compose_file() {
     local compose_file="$N8N_DIR/docker-compose.yml"
     local env_template="$PWD/.env"
     local env_file="$N8N_DIR/.env"
-    local password="$(openssl rand -base64 16)"
 
     if [[ ! -f "$compose_template" ]]; then
         log ERROR "docker-compose.yml not found at $compose_template"
-        exit 1 
+        exit 1
     fi
 
     if [[ ! -f "$env_template" ]]; then
         log ERROR ".env file not found at $env_template"
-        exit 1 
+        exit 1
     fi
-
+    
+    # Copy compose & env templates when source/target differ; back up if overwriting
     if [[ "$compose_template" != "$compose_file" ]]; then
-        cp "$compose_template" "$compose_file"
+        if [[ -f "$compose_file" ]]; then
+            cp -a "$compose_file" "${compose_file}.bak.$(date +%F_%H-%M-%S)"
+            log WARN "Existing docker-compose.yml backed up to ${compose_file}.bak.*"
+        fi
+        cp -a "$compose_template" "$compose_file"
     fi
-
+    
     if [[ "$env_template" != "$env_file" ]]; then
-        cp "$env_template" "$env_file"
+        if [[ -f "$env_file" ]]; then
+            cp -a "$env_file" "${env_file}.bak.$(date +%F_%H-%M-%S)"
+            log WARN "Existing .env backed up to ${env_file}.bak.*"
+        fi
+        cp -a "$env_template" "$env_file"
     fi
 
-    log INFO "Updating .env file with provided domain, email..."
-    # Use sed to replace variables
-    sed -i "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" "$env_file"
-    sed -i "s|^SSL_EMAIL=.*|SSL_EMAIL=${SSL_EMAIL}|" "$env_file"
+    log INFO "Updating .env file with provided domain, email, n8n version..."
+    upsert_env_var "DOMAIN" "$DOMAIN" "$env_file"
+    upsert_env_var "SSL_EMAIL" "$SSL_EMAIL" "$env_file"
+
+    # Resolve target version: explicit -v wins; else latest stable
+    local target_version="${N8N_VERSION}"
+    if [[ -z "$target_version" || "$target_version" == "latest" ]]; then
+        target_version="$(get_latest_n8n_version)"
+        [[ -z "$target_version" ]] && { log ERROR "Could not determine latest n8n tag."; exit 1; }
+    fi
+
+    # Validate the tag exists (fail fast if user passed a bad one)
+    if ! docker manifest inspect "docker.n8n.io/n8nio/n8n:${target_version}" >/dev/null 2>&1; then
+        log ERROR "Image tag docker.n8n.io/n8nio/n8n:${target_version} not found on the registry."
+        exit 1
+    fi
+
+    # Pin the tag into .env (insert or update)
+    upsert_env_var "N8N_IMAGE_TAG" "$target_version" "$env_file"
 
     # Inside prepare_compose_file
     local password_line
-    password_line=$(grep "^STRONG_PASSWORD=" "$env_file" | cut -d '=' -f2)
+    password_line=$(awk -F= '/^STRONG_PASSWORD=/{print $2; found=1} END{if(!found) print ""}' "$env_file")
     if [[ "$password_line" == "myStrongPassword123!@#" || -z "$password_line" ]]; then
         local new_password
         new_password="$(openssl rand -base64 16)"
         log INFO "Updating .env with new strong password..."
-        sed -i "s|^STRONG_PASSWORD=.*|STRONG_PASSWORD=${new_password}|" "$env_file"
+        upsert_env_var "STRONG_PASSWORD" "${new_password}" "$env_file"
     else
-    log DEBUG "Existing STRONG_PASSWORD found. Not modifying it."
-    log DEBUG "STRONG_PASSWORD=$password_line"
+        log DEBUG "Existing STRONG_PASSWORD found. Not modifying it."
+        log DEBUG "STRONG_PASSWORD=$password_line"
     fi
+
+    # Secure secrets file
+    chmod 600 "$env_file" 2>/dev/null || true
 }
 
 # Ensures all required environment variables in the Docker Compose file are defined
@@ -240,8 +284,26 @@ validate_compose_and_env() {
 
 # Installs Docker, Docker Compose, and related system dependencies
 install_docker() {
-    log INFO "Removing any old Docker versions..."
-    apt-get remove -y docker docker-engine docker.io containerd runc
+    if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+        log INFO "Docker already installed. Skipping Docker install."
+    else
+        log INFO "Removing any old Docker versions..."
+        apt-get update
+        apt-get remove -y docker docker-engine docker.io containerd runc
+        log INFO "Adding Docker GPG key (non-interactive)..."
+        mkdir -p /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+            gpg --dearmor | tee /etc/apt/keyrings/docker.gpg > /dev/null
+    
+        log INFO "Adding Docker repository..."
+        echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+        log INFO "Installing Docker Engine and Docker Compose v2..."
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    fi
     log INFO "Installing required dependencies..."
     apt-get update
     apt-get install -y \
@@ -255,25 +317,15 @@ install_docker() {
     tar \
     msmtp \
     rclone \
-    dnsutils
+    dnsutils \
+    openssl
 
-    log INFO "Adding Docker GPG key (non-interactive)..."
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-        gpg --dearmor | tee /etc/apt/keyrings/docker.gpg > /dev/null
-
-    log INFO "Adding Docker repository..."
-    echo \
-    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-    https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-    tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-    log INFO "Installing Docker Engine and Docker Compose v2..."
-    apt-get update
-    apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    # Make sure the daemon is running/enabled
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl enable --now docker || true
+    fi
 
     CURRENT_USER=${SUDO_USER:-$(whoami)}
-
     log INFO "Adding user '$CURRENT_USER' to the docker group..."
     usermod -aG docker "$CURRENT_USER"
 
@@ -287,10 +339,11 @@ get_current_n8n_version() {
 
 # Fetches the latest stable n8n version tag from Docker Hub
 get_latest_n8n_version() {
-  curl -fsSL 'https://hub.docker.com/v2/repositories/n8nio/n8n/tags' \
-  | jq -r '.results[].name' \
-  | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-  | sort -Vr | head -n 1
+    curl -fsS --retry 3 --retry-delay 2 \
+    'https://hub.docker.com/v2/repositories/n8nio/n8n/tags?page_size=100' \
+    | jq -r '.results[].name' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -Vr | head -n 1
 }
 
 # Creates all Docker volumes required by the n8n stack if they don't already exist
@@ -326,8 +379,8 @@ check_containers_healthy() {
     while [ $elapsed -lt $timeout ]; do
         log INFO "Status check at $(date +"%H:%M:%S")..."
         all_ok=true
-        docker compose ps
-        containers=$(docker ps -q)
+        docker compose ps        
+        containers=$(docker compose ps -q)
 
         for container_id in $containers; do
             name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
@@ -463,11 +516,11 @@ check_services_up_running() {
 # Orchestrates the full installation flow: validation, config setup, Docker install, service start
 install_n8n() {
     log INFO "Starting N8N installation for domain: $DOMAIN"
-    get_user_email
+    [[ -z "${SSL_EMAIL:-}" ]] && get_user_email
+    install_docker
     check_domain
     prepare_compose_file
     validate_compose_and_env
-    install_docker
     create_volumes
     run_docker_compose
     check_services_up_running
@@ -477,30 +530,42 @@ install_n8n() {
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
     cd "$N8N_DIR"
+
+    # Make sure jq is available for tag lookups
+    if ! command -v jq >/dev/null 2>&1; then
+      apt-get update && apt-get install -y jq
+    fi
+
     current_version=$(get_current_n8n_version || echo "0.0.0")
-    latest_version=$(get_latest_n8n_version)
-    if [[ -z "$latest_version" ]]; then
-        log ERROR "Could not determine latest n8n tag."
-        exit 1
+    # Decide target version
+    local target_version="$N8N_VERSION"
+    if [[ -z "$target_version" || "$target_version" == "latest" ]]; then
+        target_version=$(get_latest_n8n_version)
+        [[ -z "$target_version" ]] && { log ERROR "Could not determine latest n8n tag."; exit 1; }
     fi
 
     log INFO "Current version: $current_version"
-    log INFO "Latest version:  $latest_version"
+    log INFO "Target version:  $target_version"
 
-    if [[ "$(echo -e "$latest_version\n$current_version" | sort -V | head -n1)" == "$latest_version" && "$FORCE_UPGRADE" != true ]]; then
-        log INFO "You are already running the latest version ($latest_version). Use -f to force upgrade."
+    # Refuse to downgrade unless -f
+    if [[ "$(printf "%s\n%s" "$target_version" "$current_version" | sort -V | head -n1)" == "$target_version" \
+          && "$target_version" != "$current_version" \
+          && "$FORCE_UPGRADE" != true ]]; then
+        log INFO "Target ($target_version) <= current ($current_version). Use -f to force downgrade."
         exit 0
     fi
 
-    # Write/pin the tag into .env
-    if grep -q '^N8N_IMAGE_TAG=' "$N8N_DIR/.env"; then
-        sed -i "s/^N8N_IMAGE_TAG=.*/N8N_IMAGE_TAG=$latest_version/" "$N8N_DIR/.env"
-    else
-        echo "N8N_IMAGE_TAG=$latest_version" >> "$N8N_DIR/.env"
+    # If same version, allow redeploy only with -f
+    if [[ "$target_version" == "$current_version" && "$FORCE_UPGRADE" != true ]]; then
+        log INFO "Already on $current_version. Use -f to force redeploy."
+        exit 0
     fi
 
-    log INFO "Pulling n8nio/n8n:$latest_version and redeploying…"
-    docker compose pull n8n
+    # Pin the tag into .env (insert or update)
+    upsert_env_var "N8N_IMAGE_TAG" "$target_version" "$N8N_DIR/.env"
+
+    log INFO "Pulling n8nio/n8n:$target_version and deploying…"
+    docker compose pull n8n || docker compose pull
 
     log INFO "Stopping and removing existing containers..."
     docker compose down
@@ -513,6 +578,8 @@ upgrade_n8n() {
 
 # Stops the n8n stack and cleans up Docker containers, volumes, images, and networks
 cleanup_n8n() {
+    read -p "This will remove ALL n8n containers/volumes/images. Continue? [y/N] " ans
+    [[ "${ans,,}" == "y" ]] || { log INFO "Cleanup cancelled."; return 0; }
     log INFO "Stopping containers and removing containers, volumes, and orphan services..."
     docker compose down --remove-orphans
 
@@ -547,7 +614,7 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
 fi
 
-while getopts ":i:u:fcd:l:" opt; do
+while getopts ":i:u:v:m:fcd:l:" opt; do
   case $opt in
     i)
       DOMAIN="$OPTARG"
@@ -556,6 +623,12 @@ while getopts ":i:u:fcd:l:" opt; do
     u)
       DOMAIN="$OPTARG"
       UPGRADE=true
+      ;;
+    v)
+      N8N_VERSION="$OPTARG"
+      ;;
+    m)
+      SSL_EMAIL="$OPTARG"
       ;;
     f)
       FORCE_UPGRADE=true
@@ -583,9 +656,12 @@ done
 # Main execution
 check_root
 N8N_DIR="${TARGET_DIR:-$PWD}"
+N8N_VERSION="${N8N_VERSION:-latest}"
 log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$N8N_DIR/logs"
-sudo chown -R $USER:$USER "$N8N_DIR"
+if [[ -n "${SUDO_USER:-}" ]]; then
+  chown -R "$SUDO_USER":"$SUDO_USER" "$N8N_DIR"
+fi
 LOG_FILE="$N8N_DIR/logs/n8n_manager.log"
 exec > >(tee "$LOG_FILE") 2>&1
 log INFO "Logging to $LOG_FILE"
