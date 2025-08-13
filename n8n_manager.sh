@@ -96,8 +96,7 @@ check_root() {
 check_domain() {
     local server_ip domain_ips
     server_ip=$(curl -s https://api.ipify.org || echo "Unavailable")
-    # Resolve any CNAMEs, keep only IPv4s
-    domain_ips=$(dig +short "$DOMAIN" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tr '\n' ' ')
+    domain_ips=$(dig +short A "$DOMAIN" | tr '\n' ' ')
     log INFO "Your server's public IP is: $server_ip"
     log INFO "Domain $DOMAIN currently resolves to: $domain_ips"
     if echo "$domain_ips" | tr ' ' '\n' | grep -Fxq "$server_ip"; then
@@ -516,10 +515,10 @@ check_services_up_running() {
 
 # Orchestrates the full installation flow: validation, config setup, Docker install, service start
 install_n8n() {
-    install_docker
     log INFO "Starting N8N installation for domain: $DOMAIN"
     [[ -z "${SSL_EMAIL:-}" ]] && get_user_email
     check_domain
+    install_docker
     prepare_compose_file
     validate_compose_and_env
     create_volumes
