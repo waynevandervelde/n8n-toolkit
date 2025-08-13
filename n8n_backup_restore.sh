@@ -537,14 +537,14 @@ print_summary() {
 
     case "$UPLOAD_STATUS" in
         "SUCCESS")
-            printf "Uploaded to Google:   SUCCESS\n"
+            printf "Uploaded to Google drive:   SUCCESS\n"
             printf "Folder link:          %s\n" "$DRIVE_LINK"
             ;;
         "SKIPPED")
-            printf "Uploaded to Google:   SKIPPED\n"
+            printf "Uploaded to Google drive:   SKIPPED\n"
             ;;
         *)
-            printf "Uploaded to Google:   FAILED\n"
+            printf "Uploaded to Google drive:   FAILED\n"
             ;;
     esac
 
@@ -636,7 +636,7 @@ check_containers_healthy() {
         log INFO "Status check at $(date +%T)..."
         all_ok=true
         docker compose ps
-        containers=$(docker ps -q)
+		containers=$(docker compose ps -q)
 
         for container_id in $containers; do
             name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
@@ -832,9 +832,11 @@ restore_n8n() {
     local sql_file=$(find "$restore_dir" -name "n8n_postgres_dump_*.sql")
     if [[ -n "$sql_file" ]]; then
         log INFO "Dropping and recreating the n8ndb database to avoid restore conflicts..."
-        # Drop and recreate using the 'n8n' user
-        docker exec postgres psql -U n8n -c "DROP DATABASE IF EXISTS n8ndb;"
-        docker exec postgres psql -U n8n -c "CREATE DATABASE n8ndb OWNER n8n;"
+
+		local DB_NAME="${DB_POSTGRESDB:-${POSTGRES_DB:-n8ndb}}"
+		docker exec postgres psql -U n8n -c "DROP DATABASE IF EXISTS ${DB_NAME};"
+		docker exec postgres psql -U n8n -c "CREATE DATABASE ${DB_NAME} OWNER n8n;"
+		cat "$sql_file" | docker exec -i postgres psql -U n8n -d "${DB_NAME}"
 
         log INFO "Restoring PostgreSQL DB from $sql_file"
         cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8ndb
@@ -880,15 +882,23 @@ require_cmd() {
 require_cmd docker
 require_cmd rsync
 require_cmd tar
-require_cmd msmtp
-require_cmd rclone
+
+# Only require msmtp if we might send mail
+if [[ -n "$EMAIL_TO" ]]; then
+  require_cmd msmtp
+fi
+
+# Only require rclone if a remote is configured
+if [[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]]; then
+  require_cmd rclone
+fi
 
 # === Argument Parsing (long & short) ===
 TEMP=$(getopt -o fbr:d:l:e:s:t:nh --long force,backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
 eval set -- "$TEMP"
 
 while true; do
-    echo "Parsing argument: $1"
+    log DEBUG "Parsing argument: $1"
     case "$1" in
         -b|--backup)
             DO_BACKUP=true
