@@ -44,24 +44,42 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 1. **Download the Script**  
    ```bash
-   curl -L -o n8n_manager.sh https://raw.githubusercontent.com/thenguyenvn90/n8n/main/n8n_manager.sh && chmod +x n8n_manager.sh
+   apt install unzip
+   curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip && unzip n8n.zip && cd n8n-main && chmod +x *.sh
    ```
+   Note: After unzipping, GitHub appends -main to the folder name n8n; So in this case it’s n8n-main.
 
 2. **Run Help**  
    ```bash
    sudo ./n8n_manager.sh -h
    ```
-   You should see usage instructions.
-
+   You should see usage instructions../
+   ```
+   root@ubuntu-s-1vcpu-1gb-01://n8n-main# ./n8n_manager.sh -h
+   Usage: ./n8n_manager.sh [-i DOMAIN] [-u DOMAIN] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h
+     ./n8n_manager.sh -i <DOMAIN>         Install n8n stack
+     ./n8n_manager.sh -u <DOMAIN> [-f]    Upgrade n8n stack (optionally force) to the latest version
+     ./n8n_manager.sh -c                  Cleanup all containers, volumes, and network
+     ./n8n_manager.sh -d <TARGET_DIR>     Target install directory (default: /root/n8n-main)
+     ./n8n_manager.sh -l                  Set log level: DEBUG, INFO (default), WARN, ERROR
+     ./n8n_manager.sh -h                  Show script usage
+   ```
 ---
 
 ## 🔧 Install n8n
 
 ```bash
-sudo ./n8n_manager.sh -i n8n.example.com
+sudo ./n8n_manager.sh -i n8n.YourDomain.com
 ```
 
-1. When prompted, enter your email (used for SSL).  
+1. When prompted, enter your email (used for SSL).
+```
+   root@ubuntu-s-1vcpu-1gb-01:~/n8n-main# ./n8n_manager.sh -i n8n.YourDomain.com
+   [INFO] Working on directory: /root/n8n-main
+   [INFO] Logging to /root/n8n-main/logs/n8n_manager.log
+   [INFO] Starting N8N installation for domain: n8n.YourDomain.com
+   Enter your email address (used for SSL cert): yourValidEmail@gmail.com
+```
 2. The script will:
    - Verify your DNS record
    - Install Docker & Docker Compose if needed
@@ -73,9 +91,13 @@ sudo ./n8n_manager.sh -i n8n.example.com
    ```
    ─────────────────────────────────────────────────────────
    N8N has been successfully installed!
-   Domain:             https://n8n.example.com
+   Domain:             https://n8n.YourDomain.com
    Installed Version:  1.105.3
-   Execution log:      /path/to/logs/n8n_manager.log
+   Install Timestamp:  2025-08-13 10:42:14
+   Installed By:       root
+   Target Directory:   /root/n8n-main
+   SSL Email:          yourValidEmail@gmail.com
+   Execution log:      /root/n8n-main/logs/n8n_manager.log
    ─────────────────────────────────────────────────────────
    ```
 
@@ -86,16 +108,31 @@ sudo ./n8n_manager.sh -i n8n.example.com
 Pull and deploy the latest n8n release:
 
 ```bash
-sudo ./n8n_manager.sh -u n8n.example.com
+sudo ./n8n_manager.sh -u n8n.YourDomain.com
 ```
 
-- If already up-to-date, the script reports it.  
+- If already up-to-date, the script reports it.
+  ```
+
+  ```
 - To force an upgrade even if on the latest version, add `-f`:
 
   ```bash
-  sudo ./n8n_manager.sh -u -f n8n.example.com
+  sudo ./n8n_manager.sh -u -f n8n.YourDomain.com
   ```
-
+- On success, you’ll see:
+  ```
+   ─────────────────────────────────────────────────────────
+   N8N has been successfully upgraded!
+   Domain:             https://n8n.YourDomain.com
+   Installed Version:  1.106.3
+   Install Timestamp:  2025-08-13 10:42:14
+   Installed By:       root
+   Target Directory:   /root/n8n-main
+   SSL Email:          yourValidEmail@gmail.com
+   Execution log:      /root/n8n-main/logs/n8n_manager.log
+   ─────────────────────────────────────────────────────────
+  ```
 ---
 
 ## 🧹 Cleanup (Uninstall)
@@ -115,9 +152,9 @@ sudo ./n8n_manager.sh -c
 - **Main log file:** `logs/n8n_manager.log`  
 - **Check container health:**
   ```bash
-  docker compose -f /path/to/docker-compose.yml ps
+  docker compose -f /root/n8n-main/docker-compose.yml ps
   ```
-- **Browse UI:** Visit `https://n8n.example.com` in your web browser.
+- **Browse UI:** Visit `https://n8n.YourDomain.com` in your web browser.
 
 ---
 
@@ -125,13 +162,14 @@ sudo ./n8n_manager.sh -c
 
 - **Target Directory**: By default uses current folder. To change:
   ```bash
-  sudo ./n8n_manager.sh -i n8n.example.com -d /opt/n8n
+  mkdir -p /home/n8n
+  sudo ./n8n_manager.sh -i n8n.YourDomain.com -d /home/n8n
   ```
 - **Log Level** (DEBUG, INFO, WARN, ERROR):
   ```bash
-  sudo ./n8n_manager.sh -i n8n.example.com -l DEBUG
+  sudo ./n8n_manager.sh -i n8n.YourDomain.com -l DEBUG
   ```
-All logs write to `TARGET_DIR/logs/n8n_manager.log`.
+All logs write to `/home/n8n/logs/n8n_manager.log`.
 
 ---
 
@@ -143,7 +181,7 @@ All logs write to `TARGET_DIR/logs/n8n_manager.log`.
    ```
 2. **Verify DNS:**
    ```bash
-   dig +short n8n.example.com
+   dig +short n8n.YourDomain.com
    ```
 3. **Check firewall:**
    ```bash
