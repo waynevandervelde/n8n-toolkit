@@ -113,7 +113,13 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com
 
 - If already up-to-date, the script reports it.
   ```
-
+   root@ubuntu-s-1vcpu-1gb-sgp1-01:/root/n8n-main# ./n8n_manager.sh -u n8n-test.YourDomain.com
+   [INFO] Working on directory: /root/n8n-main
+   [INFO] Logging to /root/n8n-main/logs/n8n_manager.log
+   [INFO] Checking current and latest n8n versions...
+   [INFO] Current version: 1.106.3
+   [INFO] Latest version:  1.106.3
+   [INFO] You are already running the latest version (1.106.3). Use -f to force upgrade.
   ```
 - To force an upgrade even if on the latest version, add `-f`:
 
@@ -149,7 +155,7 @@ sudo ./n8n_manager.sh -c
 
 ## 🗂️ Logs & Status
 
-- **Main log file:** `logs/n8n_manager.log`  
+- **Main log file:** `/root/n8n-main/logs/n8n_manager.log`  
 - **Check container health:**
   ```bash
   docker compose -f /root/n8n-main/docker-compose.yml ps
