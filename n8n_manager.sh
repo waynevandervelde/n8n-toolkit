@@ -287,7 +287,7 @@ get_current_n8n_version() {
 
 # Fetches the latest stable n8n version tag from Docker Hub
 get_latest_n8n_version() {
-  curl -fsSL 'https://hub.docker.com/v2/repositories/n8nio/n8n/tags?page_size=100' \
+  curl -fsSL 'https://hub.docker.com/v2/repositories/n8nio/n8n/tags' \
   | jq -r '.results[].name' \
   | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
   | sort -Vr | head -n 1
