@@ -109,7 +109,6 @@ check_domain() {
     fi
 }
 
-
 # Safely add/update a KEY=VALUE in an .env file
 upsert_env_var() {
     local key="$1" val="$2" file="$3"
@@ -186,6 +185,8 @@ prepare_compose_file() {
     fi
 
     # Pin the tag into .env (insert or update)
+    log INFO "Installing n8n version: $target_version"
+    log INFO "Updating .env with N8N_IMAGE_TAG=$target_version"
     upsert_env_var "N8N_IMAGE_TAG" "$target_version" "$env_file"
 
     # Inside prepare_compose_file
@@ -515,9 +516,9 @@ check_services_up_running() {
 
 # Orchestrates the full installation flow: validation, config setup, Docker install, service start
 install_n8n() {
+    install_docker
     log INFO "Starting N8N installation for domain: $DOMAIN"
     [[ -z "${SSL_EMAIL:-}" ]] && get_user_email
-    install_docker
     check_domain
     prepare_compose_file
     validate_compose_and_env
