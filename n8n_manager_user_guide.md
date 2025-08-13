@@ -100,7 +100,7 @@ When prompted, enter your email (used for SSL).
    [INFO] Working on directory: /root/n8n-main
    [INFO] Logging to /root/n8n-main/logs/n8n_manager.log
    [INFO] Starting N8N installation for domain: n8n.YourDomain.com
-   Enter your email address (used for SSL cert): yourValidEmail@gmail.com
+   Enter your email address (used for SSL cert): you@YourDomain.com
 ```
 
 Or provide your SSL email inline (no prompt)
