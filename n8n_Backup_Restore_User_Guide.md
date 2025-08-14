@@ -42,8 +42,7 @@ Install the tools the script needs (Ubuntu/Debian):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y docker.io rsync tar msmtp-mta rclone \
-  dnsutils curl openssl
+sudo apt-get install -y docker.io rsync tar msmtp-mta rclone dnsutils curl openssl
 ```
 
 > `getopt` (from util‑linux) is usually already present on Ubuntu.\
@@ -92,31 +91,7 @@ You’ll pass these when running:
 
 ## Quick start (most common)
 
-### 1) Normal backup (skip if nothing changed)
-
-```bash
-cd /your/project
-export SMTP_USER="you@gmail.com"
-export SMTP_PASS="app_password"
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups
-```
-
-### 2) Force a backup (even with no changes)
-
-```bash
-./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
-```
-
-### 3) Restore from a backup file
-
-```bash
-# Replace the path with your actual file name in /your/project/backups
-./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
-```
-
----
-
-## Command options (cheat‑sheet)
+### 1) Command options (cheat‑sheet)
 
 | Option       | Long form                | Meaning                                                |
 | ------------ | ------------------------ | ------------------------------------------------------ |
@@ -132,6 +107,69 @@ export SMTP_PASS="app_password"
 | `-h`         | `--help`                 | Show help.                                             |
 
 **Environment vars used:** `SMTP_USER`, `SMTP_PASS` (for Gmail auth).
+
+### 2) Normal backup (skip if nothing changed)
+
+- Execute the backup, upload to google drive and always send email to notify the status:
+
+```bash
+cd /root/n8n-main
+export SMTP_USER="you@YourDomain.com"
+export SMTP_PASS="app_password"
+./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
+```
+
+- On backup success, you’ll see:
+
+```bash
+[INFO] Local backup succeeded: n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
+[INFO] Updating snapshot to current state…
+[INFO] Snapshot refreshed.
+[INFO] Uploading n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz to gdrive-user:n8n-backups
+[INFO] Uploaded both n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz and backup_summary.md successfully!
+[INFO] Pruning remote archives older than 7 days
+[INFO] Email sent: 2025-08-14_00-36-05: n8n Backup SUCCESS
+[INFO] Print a summary of what happened...
+═════════════════════════════════════════════════════════════
+Action:               Backup (normal)
+Timestamp:            2025-08-14_00-36-05
+Domain:               https://n8n.YourDomain.com
+Backup file:          /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
+N8N Version:          1.107.0
+Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-36-05.log
+Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Uploaded to Google:   SUCCESS
+Folder link:          https://drive.google.com/drive/folders/1LjIIfFb6MD0QoVUR45B4gsi3CL87tWic
+Email notify sent:    Yes
+═════════════════════════════════════════════════════════════
+```
+- You can check the daily backup status:
+  
+```bash
+cat /root/n8n-main/backups/backup_summary.md
+| DATE               | ACTION         | N8N_VERSION | STATUS   |
+|--------------------|----------------|-------------|----------|
+| 2025-08-13_02-00-00 | Backup (normal) | 1.107.0 | SUCCESS |
+| 2025-08-14_02-00-00 | Backup (normal) | 1.107.0 | SUCCESS |
+| 2025-08-15_02-00-00 | Backup (normal) | 1.107.0 | SUCCESS |
+| 2025-08-16_02-00-00 | Skipped | 1.107.0 | SKIPPED |
+| 2025-08-17_02-00-00 | Skipped | 1.107.0 | SKIPPED |
+| 2025-08-18_02-00-00 | Skipped | 1.107.0 | SKIPPED |
+| 2025-08-19_02-00-00 | Skipped | 1.107.0 | SKIPPED |
+| 2025-08-20_02-00-00 | Backup (forced) | 1.107.0 | SUCCESS |
+```
+### 3) Force a backup (even with no changes)
+
+```bash
+./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
+```
+
+### 4) Restore from a backup file
+
+```bash
+# Replace the path with your actual file name in /your/project/backups
+./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
+```
 
 ---
 
@@ -168,6 +206,21 @@ If nothing changed since the last successful backup, it **skips** (unless you us
 
 > After each successful backup, the snapshot is refreshed automatically.
 
+Example logs:
+```bash
+[INFO] No changes detected; skipping backup.
+[INFO] Print a summary of what happened...
+═════════════════════════════════════════════════════════════
+Action:               Skipped
+Timestamp:            2025-08-14_00-46-17
+Domain:               https://n8n.YourDomain.com
+N8N Version:          1.107.0
+Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-46-17.log
+Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Uploaded to Google:   SKIPPED
+Email notify sent:    No
+═════════════════════════════════════════════════════════════
+```
 ---
 
 ## Restore (step by step)
@@ -193,25 +246,107 @@ What it does:
 > ⚠️ Make sure your `.env` database name matches the one you restore into.\
 > This script restores the dump into ``. If your app uses `DB_POSTGRESDB=n8n`, either update `.env` to `n8ndb` or adjust the script/restore step accordingly.
 
+On restore success, you’ll see:
+  ```bash
+[INFO] Restore completed successfully.
+═════════════════════════════════════════════════════════════
+Domain:               https://n8n-test.nguyenminhthe.com
+Restore from file:    /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
+N8N Version:          1.107.0
+Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
+Timestamp:            2025-08-13_16-39-54
+Volumes Restored:     n8n-data, postgres-data, letsencrypt
+PostgreSQL:           Restored from SQL dump
+═════════════════════════════════════════════════════════════
+```
 ---
 
 ## Scheduling (automatic daily backups)
 
-Use cron (example: **2:00 AM** daily):
+Here are two easy ways to run your backup every day automatically.
+
+1. Use cron (example: **2:00 AM** daily):
+
+- Create a tiny wrapper script so cron has everything it needs:
 
 ```bash
-crontab -e
+sudo mkdir -p /root/n8n-main/logs
+sudo tee /root/n8n-main/run_backup.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /root/n8n-main
+# Gmail for notifications
+export SMTP_USER="you@YourDomain.com"
+export SMTP_PASS="your_app_password"   # Gmail App Password
+# Run backup (uploads to Drive + email on failures)
+./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups --notify-on-success >> /root/n8n-main/logs/cron.log 2>&1
+EOF
+sudo chmod +x /root/n8n-main/run_backup.sh
 ```
 
-Add a line (adjust paths/emails/remotes):
+- Schedule it daily at 02:00 (server’s local time)
 
 ```cron
-0 2 * * * cd /your/project && \
-SMTP_USER="you@gmail.com" SMTP_PASS="app_pass" \
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups >> logs/cron.log 2>&1
+0 2 * * * /root/n8n-main/run_backup.sh
 ```
 
+- Want a weekly forced backup as well? Add this extra line to force on Sundays:
+
+```cron
+15 2 * * 0 /root/n8n-main/n8n_backup_restore.sh -b -f -e you@YourDomain.com -s gdrive-user -t n8n-backups >> /root/n8n-main/logs/cron.log 2>&1
+```
 ---
+
+2. Use systemd timer (resilient & survives reboots)
+
+- Craete Service unit (/etc/systemd/system/n8n-backup.service)
+
+```bash
+sudo tee /etc/systemd/system/n8n-backup.service >/dev/null <<'EOF'
+[Unit]
+Description=n8n daily backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/n8n
+Environment=SMTP_USER=you@YourDomain.com
+Environment=SMTP_PASS=your_app_password
+ExecStart=/root/n8n-main/n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups --notify-on-success
+StandardOutput=append:/root/n8n-main/logs/systemd-backup.log
+StandardError=append:/root/n8n-main/logs/systemd-backup.log
+EOF
+```
+- Create the timer (runs 02:05 daily and catches missed runs after reboot):
+
+```bash
+sudo tee /etc/systemd/system/n8n-backup.timer >/dev/null <<'EOF'
+[Unit]
+Description=Run n8n backup daily
+
+[Timer]
+OnCalendar=*-*-* 02:05:00
+Persistent=true
+Unit=n8n-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+```
+
+- Enable & start the timer:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now n8n-backup.timer
+systemctl list-timers | grep n8n-backup
+```
+- Check status & logs
+
+```bash
+systemctl list-timers | grep n8n-backup
+journalctl -u n8n-backup.service --no-pager -n 200
+tail -n 200 /root/n8n/logs/systemd-backup.log
+```
 
 ## Google Drive path tips
 
@@ -248,13 +383,13 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 - Backup to Drive, email on failures only:
 
   ```bash
-  ./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Backup to Drive, **always** email (success or failure):
 
   ```bash
-  ./n8n_backup_restore.sh -b -n -e you@gmail.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Force a backup even if unchanged:
