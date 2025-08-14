@@ -1,10 +1,15 @@
-Self-Hosted n8n Orchestration &amp; Automation Toolkit
-# n8n Stack — Installer, Manager, and Backup/Restore
+# Self-Hosted n8n — Install, Upgrade, and Backup/Restore
 
-> Turn-key scripts to **install, upgrade, and manage** an n8n stack (Docker Compose), plus a **reliable backup/restore** tool with optional Google Drive sync and email notifications.
+Automate the **install**, **upgrade**, **backup**, and **restore** of an [n8n](https://n8n.io/) stack running on Docker.  
+This repo contains two primary scripts:
 
-**Author:** TheNguyen · thenguyen.ai.automation@gmail.com  
-**OS:** Ubuntu/Debian (root or sudo)
+- `n8n_manager.sh` – zero-touch **install/upgrade/cleanup** with Traefik & TLS
+- `n8n_backup_restore.sh` – safe, **change-aware backups** + optional Google Drive sync & email alerts
+
+> For friendly, step-by-step docs, see:
+> - **Manager guide:** [`n8n_manager_user_guide.md`](./n8n_manager_user_guide.md)
+> - **Backup/restore guide:** [`n8n_Backup_Restore_User_Guide.md`](./n8n_Backup_Restore_User_Guide.md)
+> - **Google Drive setup:** [`Rclone_Google_Drive_Setup_Guide.md`](./Rclone_Google_Drive_Setup_Guide.md)
 
 ---
 
@@ -54,12 +59,17 @@ This repo contains two production-ready bash scripts:
 
 ```
 .
-├── n8n_manager.sh             # Installer / upgrader / cleanup
-├── n8n_backup_restore.sh      # Backup & restore tool
-├── docker-compose.yml         # Template Compose file
-├── .env                       # Template env file (will be updated by scripts)
-├── logs/                      # Created on first run
-└── backups/                   # Created by backup script (archives, summary, snapshot/)
+├── n8n_manager.sh                      # Install / Upgrade / Cleanup
+├── n8n_backup_restore.sh               # Backup / Restore + Google Drive + Email
+├── docker-compose.yml                  # Template Compose file (n8n + Postgres + Traefik stack)
+├── .env                                # Template env (used by docker-compose)
+├── logs/                               # Created on first run
+└── backups/                            # Created by backup script (archives, summary, snapshot/)
+├── setup_rclone.sh                     # Helper to bootstrap rclone (optional)
+├── n8n_manager_user_guide.md           # User guide for n8n installation, upgrade, cleanup
+├── n8n_Backup_Restore_User_Guide.md    # User guide for n8n backup, restore
+├── Rclone_Google_Drive_Setup_Guide.md  # Google Drive how-to setup for rclone
+└── README.md
 ```
 
 > Keep `docker-compose.yml` and `.env` in the **same folder** where you run the scripts.
