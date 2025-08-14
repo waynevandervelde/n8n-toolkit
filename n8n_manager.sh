@@ -287,9 +287,8 @@ install_docker() {
     if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
         log INFO "Docker already installed. Skipping Docker install."
     else
-        log INFO "Removing any old Docker versions..."
-        apt-get update
-        apt-get remove -y docker docker-engine docker.io containerd runc
+        log INFO "Updating APT metadata..."
+        apt-get update -y
         log INFO "Adding Docker GPG key (non-interactive)..."
         mkdir -p /etc/apt/keyrings
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
@@ -302,7 +301,10 @@ install_docker() {
         tee /etc/apt/sources.list.d/docker.list > /dev/null
 
         log INFO "Installing Docker Engine and Docker Compose v2..."
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+        if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
+            log WARN "APT install from Docker repo failed. Falling back to official convenience script..."
+            curl -fsSL https://get.docker.com | sh
+        fi
     fi
     log INFO "Installing required dependencies..."
     apt-get update
@@ -437,7 +439,7 @@ print_summary_message() {
 # Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
 verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
-    local MAX_RETRIES=3
+    local MAX_RETRIES=5
     local SLEEP_INTERVAL=10
 
     log INFO "Checking DNS resolution for domain..."
