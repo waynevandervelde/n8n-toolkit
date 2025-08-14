@@ -4,7 +4,6 @@ Self-Hosted n8n Orchestration &amp; Automation Toolkit
 > Turn-key scripts to **install, upgrade, and manage** an n8n stack (Docker Compose), plus a **reliable backup/restore** tool with optional Google Drive sync and email notifications.
 
 **Author:** TheNguyen · thenguyen.ai.automation@gmail.com  
-**Version:** 1.0.0 (manager) · 1.2.0 (backup/restore)  
 **OS:** Ubuntu/Debian (root or sudo)
 
 ---
