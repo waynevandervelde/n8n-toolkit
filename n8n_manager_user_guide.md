@@ -127,7 +127,7 @@ At the end, you’ll see a summary with your URL, version, and log file path.
    Install Timestamp:  2025-08-13 10:42:14
    Installed By:       root
    Target Directory:   /root/n8n-main
-   SSL Email:          yourValidEmail@gmail.com
+   SSL Email:          you@YourDomain.com
    Execution log:      /root/n8n-main/logs/n8n_manager.log
    ─────────────────────────────────────────────────────────
    ```
@@ -162,7 +162,7 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
    Install Timestamp:  2025-08-13 10:42:14
    Installed By:       root
    Target Directory:   /root/n8n-main
-   SSL Email:          yourValidEmail@gmail.com
+   SSL Email:          you@YourDomain.com
    Execution log:      /root/n8n-main/logs/n8n_manager.log
    ─────────────────────────────────────────────────────────
   ```
