@@ -4,8 +4,20 @@
 **Author:** TheNguyen  
 **Last Updated:** 2025-08-05  
 
-Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgrading, and cleaning up the n8n automation platform using Docker Compose. This guide is written for non‑technical users and walks you through all the steps and common scenarios.
+Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgrading, and cleaning up the n8n automation platform using Docker Compose.
 
+---
+## Table of Contents
+
+- [Introduction](#introduction)
+- [Prerequisites](#prerequisites)
+- [Getting Started](#getting-started)
+- [Install n8n](#install-n8n)
+- [Upgrade n8n](#upgrade-n8n)
+- [Advanced Options](#advanced-options)
+- [Cleanup / Uninstall](#cleanup)
+- [Logs and Status](#logs-and-status)
+- [Troubleshooting](#troubleshooting)
 ---
 
 ## 📖 Introduction
@@ -15,21 +27,6 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 - **Install**: Set up Docker, Docker Compose, SSL certificates, and launch n8n behind Traefik.
 - **Upgrade**: Pull the latest n8n image, migrate settings, and restart services.
 - **Cleanup**: Remove all containers, volumes, networks, and images to start fresh.
-
----
-
-## 🚀 Features
-
-1. **Domain Validation**: Checks that your chosen domain or sub‑domain resolves to this server’s IP.
-2. **Docker & Compose Installer**: Automatically installs/removes any old Docker versions and pulls in Docker Engine & Compose v2.
-3. **Persistent Volumes**: Creates `n8n-data`, `postgres-data`, and `letsencrypt` volumes.
-4. **SSL Certificates**: Prompts for your email and obtains Let’s Encrypt certs via Traefik (or accept `-m you@example.com`).
-5. **Health Checks**: Waits for containers to report “healthy” before completing and validates HTTPS/certificate.
-6. **Upgrades**: Pulls the correct image tag and safely redeploys the stack.
-7. **Version Pinning (`-v`)**: Install or upgrade to an exact n8n version (e.g., `-v 1.106.3`), or omit to use latest stable.
-8. **Force Mode (`-f`)**: Redeploy even if versions match; also required to **downgrade** safely.
-9. **Cleanup Mode**: Stops/removes everything—containers, images, volumes, and networks.
-10. **Logging**: Writes a detailed log to `logs/n8n_manager.log` in your install directory.
 
 ---
 
@@ -62,7 +59,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    apt install unzip
    curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip && unzip n8n.zip && cd n8n-main && chmod +x *.sh
    ```
-   Note: After unzipping, GitHub appends -main to the folder name n8n; So in this case it’s n8n-main.
+   Note: After unzipping, GitHub appends "-main" to the folder name n8n. In this case, it’s n8n-main.
 
 2. **Run Help**  
    ```bash
@@ -73,19 +70,19 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    Usage: ./n8n_manager.sh [-i DOMAIN] [-u DOMAIN] [-v VERSION] [-m EMAIL] [-f] [-c] [-d TARGET_DIR] [-l LOG_LEVEL] -h
      -i <DOMAIN>         Install n8n stack
      -u <DOMAIN>         Upgrade n8n stack
-     -v <VERSION>        Pin n8n version (e.g. 1.106.3). Omit or use 'latest' for latest stable
+     -v <VERSION>        Pin n8n version (e.g. 1.106.3). Omit or use 'latest' for the latest stable
      -m <EMAIL>          Provide SSL email non‑interactively (skips prompt)
-     -f                  Force redeploy / allow downgrade
-     -c                  Cleanup all containers, volumes, network
+     -f                  Force redeploy/allow downgrade
+     -c                  Cleanup all containers, volumes, and network
      -d <DIR>            Install directory (default: current)
      -l <LEVEL>          Log level: DEBUG|INFO|WARN|ERROR
      -h                  Help
    ```
 ---
 
-## 🔧 Installation Flow
+## 🔧 Install n8n
 
-1. Install n8n
+1. Command to install n8n
 
 Interactive email prompt:
 ```bash
@@ -135,19 +132,19 @@ At the end, you’ll see a summary with your URL, version, and log file path.
 
 ## 🔄 Upgrade n8n
 
-**Latest stable:**
+**Upgrade to the latest stable version:**
 
 ```bash
 sudo ./n8n_manager.sh -u n8n.YourDomain.com
 ```
 
-**Pin a specific version:** (installs/upgrades to exactly this tag and writes it to `.env` as `N8N_IMAGE_TAG`)
+**Upgrade to a specific greater version:**
 
 ```bash
 sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.106.3
 ```
 
-**Downgrade:** (requires `-f` to proceed)
+**Upgrade to a specific lower version:** (requires `-f` to proceed)
 
 ```bash
 sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
@@ -174,7 +171,22 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
 
 ---
 
-## 🧹 Cleanup (Uninstall)
+## ⚙️ Advanced Options
+
+- **Target Directory**: By default, uses the current folder. To change:
+  ```bash
+  mkdir -p /home/n8n
+  sudo ./n8n_manager.sh -i n8n.YourDomain.com -d /home/n8n
+  ```
+- **Log Level** (DEBUG, INFO, WARN, ERROR):
+  ```bash
+  sudo ./n8n_manager.sh -i n8n.YourDomain.com -l DEBUG
+  ```
+All logs are written to `/home/n8n/logs/n8n_manager.log`.
+
+---
+
+## 🧹 Cleanup
 
 If you need to completely remove n8n and start over:
 
@@ -186,7 +198,7 @@ sudo ./n8n_manager.sh -c
 
 ---
 
-## 🗂️ Logs & Status
+## 🗂️ Logs and Status
 
 - **Main log file:** `/root/n8n-main/logs/n8n_manager.log`  
 - **Check container health:**
@@ -197,22 +209,7 @@ sudo ./n8n_manager.sh -c
 
 ---
 
-## ⚙️ Advanced Options
-
-- **Target Directory**: By default uses current folder. To change:
-  ```bash
-  mkdir -p /home/n8n
-  sudo ./n8n_manager.sh -i n8n.YourDomain.com -d /home/n8n
-  ```
-- **Log Level** (DEBUG, INFO, WARN, ERROR):
-  ```bash
-  sudo ./n8n_manager.sh -i n8n.YourDomain.com -l DEBUG
-  ```
-All logs write to `/home/n8n/logs/n8n_manager.log`.
-
----
-
-## 🤝 Support & Troubleshooting
+## 🤝 Troubleshooting
 
 1. **View recent logs:**
    ```bash
