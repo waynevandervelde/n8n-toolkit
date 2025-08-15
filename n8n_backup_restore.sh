@@ -77,8 +77,8 @@ log() {
 #   Source .env for DOMAIN and other variables, exiting if missing.
 ################################################################################
 load_env() {
-    [[ -f .env ]] || { log ERROR ".env not found."; exit 1; }
-    set -o allexport; source .env; set +o allexport
+    [[ -f "$N8N_DIR/.env" ]] || { log ERROR ".env not found in $N8N_DIR"; exit 1; }
+    set -o allexport; source "$N8N_DIR/.env"; set +o allexport
     [[ -n "${DOMAIN:-}" ]] || { log ERROR "DOMAIN not set in .env"; exit 1; }
 }
 
@@ -274,7 +274,12 @@ is_system_changed() {
 #   Returns the version of n8n running in the Docker container.
 ################################################################################
 get_current_n8n_version() {
-    docker exec n8n n8n --version 2>/dev/null
+	local cid
+	cid=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q n8n 2>/dev/null || true)
+	if [[ -n "$cid" ]]; then
+		docker exec "$cid" n8n --version 2>/dev/null && return 0
+	fi
+	docker exec n8n n8n --version 2>/dev/null || echo "unknown"
 }
 
 ################################################################################
@@ -375,9 +380,11 @@ do_local_backup() {
     done
 
 	log INFO "Dumping PostgreSQL database..."
+ 	local DB_USER="${DB_POSTGRESDB_USER:-${POSTGRES_USER:-n8n}}"
+	local DB_NAME="${DB_POSTGRESDB_DATABASE:-${POSTGRES_DB:-n8n}}"
     if docker exec postgres sh -c "pg_isready" &>/dev/null; then
         docker exec postgres \
-            pg_dump -U n8n -d n8n \
+            pg_dump -U "$DB_USER" -d "$DB_NAME" \
         > "$BACKUP_PATH/n8n_postgres_dump_$DATE.sql" \
         || { log ERROR "Postgres dump failed"; return 1; }
         log INFO "Database dump saved to $BACKUP_PATH/n8n_postgres_dump_$DATE.sql"
@@ -410,6 +417,7 @@ do_local_backup() {
 #   Returns 0 if SKIPPED or SUCCESS, 1 if FAIL.
 ################################################################################
 upload_backup_rclone() {
+	local ret=0
     # nothing to do if no remote configured
     if [[ -z "$RCLONE_REMOTE" || -z "$RCLONE_TARGET" ]]; then
         UPLOAD_STATUS="SKIPPED"
@@ -624,21 +632,22 @@ backup_n8n() {
 }
 
 ################################################################################
-# check_containers_healthy()
+# wait_for_containers_healthy()
 #   Polls defined containers until they’re all running & healthy (or times out).
 ################################################################################
-check_containers_healthy() {
-    timeout=180
-    interval=10
-    elapsed=0
+wait_for_containers_healthy() {
+	local timeout="${1:-180}"
+	local interval="${2:-10}"
+ 	local containers all_ok name status health
+    local elapsed=0
 
     log INFO "Checking container status..."
 
     while [ $elapsed -lt $timeout ]; do
         log INFO "Status check at $(date +%T)..."
         all_ok=true
-        docker compose ps
-		containers=$(docker compose ps -q)
+        docker compose -f "$N8N_DIR/docker-compose.yml" ps
+		containers=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q)
 
         for container_id in $containers; do
             name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
@@ -675,6 +684,54 @@ check_containers_healthy() {
 }
 
 ################################################################################
+# check_container_healthy()
+#   Polls defined container until it's running & healthy (or times out).
+################################################################################
+check_container_healthy() {
+    local container_name="$1"
+    local timeout="${2:-60}"
+    local interval="${3:-5}"
+    local elapsed=0
+
+    log INFO "Checking health for container: $container_name"
+
+    while [ $elapsed -lt $timeout ]; do
+        local container_id
+		docker compose -f "$N8N_DIR/docker-compose.yml" ps
+		container_id=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q "$container_name" 2>/dev/null || true)
+		if [[ -z "$container_id" ]]; then
+            container_id=$(docker ps -q -f "name=${container_name}" || true)
+        fi
+
+        if [[ -z "$container_id" ]]; then
+            log WARN "Container '$container_name' not found or not running."
+        else
+            local status health
+            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
+            health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
+
+            if [[ "$status" == "running" && ( "$health" == "none" || "$health" == "healthy" ) ]]; then
+                log INFO "$container_name is running and ${health:-no-health-check}"
+                return 0
+            else
+                log WARN "$container_name is running but not healthy (status: $status, health: $health)"
+            fi
+        fi
+
+        log INFO "Waiting ${interval}s for next check"
+        for ((i = 0; i < interval; i++)); do
+            echo -n "."
+            sleep 1
+        done
+        echo ""
+        elapsed=$((elapsed + interval))
+    done
+
+    log ERROR "Timeout after ${timeout}s. Container '$container_name' is not healthy."
+    return 1
+}
+
+################################################################################
 # verify_traefik_certificate()
 #   Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
 ################################################################################
@@ -682,6 +739,9 @@ verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
     local MAX_RETRIES=3
     local SLEEP_INTERVAL=10
+	local domain_ip
+ 	local cert_info issuer subject not_before not_after
+  	local response success=false
 
     log INFO "Checking DNS resolution for domain..."
     domain_ip=$(dig +short "$DOMAIN")
@@ -747,15 +807,15 @@ verify_traefik_certificate() {
 #   Combines container health and certificate checks to confirm stack is operational
 ################################################################################
 check_services_up_running() {
-    if ! check_containers_healthy; then
+    if ! wait_for_containers_healthy; then
         log ERROR "Some containers are not running or unhealthy. Please check the logs above."
         return 1
     fi
 
-    # if ! verify_traefik_certificate; then
-    #     log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-    #     return 1
-    # fi
+    if ! verify_traefik_certificate; then
+        log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
+        return 1
+    fi
     return 0
 }
 
@@ -771,19 +831,46 @@ restore_n8n() {
         return 1
     fi
     log INFO "Starting restore at $DATE..."
-    local restore_dir="/tmp/n8n_restore_$(date +%s)"
+    local restore_dir="$N8N_DIR/n8n_restore_$(date +%s)"
 	mkdir -p "$restore_dir" || { log ERROR "Cannot create $restore_dir"; return 1; }
  
     log INFO "Extracting backup archive to $restore_dir"
 	tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir" \
       || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
 
-    # Stop and remove the current containers before cleaning volumes
+    # Restore .env and docker-compose.yml if present
+    if [[ -f "$restore_dir/.env.bak" ]]; then
+        cp -f "$restore_dir/.env.bak" "$N8N_DIR/.env"
+        log INFO "Restored .env file to $N8N_DIR/.env"
+    fi
+
+    if [[ -f "$restore_dir/docker-compose.yml.bak" ]]; then
+        cp -f "$restore_dir/docker-compose.yml.bak" "$N8N_DIR/docker-compose.yml"
+        log INFO "Restored docker-compose.yml to $N8N_DIR/docker-compose.yml"
+    fi
+
+	# Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
-	docker compose down --volumes --remove-orphans \
+	docker compose -f "$N8N_DIR/docker-compose.yml" down --volumes --remove-orphans \
       || { log ERROR "docker-compose down failed"; return 1; }
 
-    # Cleanup volumes to avoid DB conflict
+   	# Check if we have a SQL database	
+  	local sql_file
+  	sql_file="$(find "$restore_dir" -name "n8n_postgres_dump_*.sql" -print -quit || true)"
+
+	# List volumes will be restored
+	# - If the sql_file exists: No need to restore volume postgres-data (to avoid conflict), the other volumes can be restored as normal.
+	# - If the sql_file does not exist: restore all volumes ("n8n-data" "postgres-data" "letsencrypt")
+	if [[ -n "${sql_file:-}" ]]; then
+    	log INFO "SQL dump found. Skipping postgres-data volume restore..."
+		local filtered=()
+		for v in "${VOLUMES[@]}"; do
+			[[ "$v" == "postgres-data" ]] || filtered+=("$v")
+		done
+		VOLUMES=("${filtered[@]}")
+	fi
+
+ 	# Cleanup volumes to avoid DB conflict
     log INFO "Cleaning existing Docker volumes before restore..."
     for vol in "${VOLUMES[@]}"; do
         if docker volume inspect "$vol" >/dev/null 2>&1; then
@@ -795,80 +882,92 @@ restore_n8n() {
 
     # Restore Docker volumes
 	log INFO "Restoring volumes from archive..."
-    for vol in n8n-data postgres-data letsencrypt; do
-        local vol_file=$(find "$restore_dir" -name "*${vol}_*.tar.gz")
-        if [[ -z "$vol_file" ]]; then
-            log ERROR "No backup found for volume $vol"
-            return 1
-        fi
+	for vol in "${VOLUMES[@]}"; do
+		local vol_file
+		vol_file="$(find "$restore_dir" -name "*${vol}_*.tar.gz" -print -quit || true)"
+		if [[ -z "${vol_file:-}" ]]; then
+	  		log ERROR "No backup found for volume $vol"
+	  		return 1
+		fi
+		docker volume create "$vol" >/dev/null
+		docker run --rm -v "${vol}:/data" -v "$restore_dir:/backup" alpine \
+	  		sh -c "rm -rf /data/* && tar xzf /backup/$(basename "$vol_file") -C /data" \
+	  		|| { log ERROR "Failed to restore $vol"; return 1; }
+			log INFO "Volume $vol restored"
+	done
 
-  		docker volume create "$vol" &>/dev/null
-        docker run --rm -v "${vol}:/data" -v "$restore_dir:/backup" alpine \
-            sh -c "rm -rf /data/* && tar xzf /backup/$(basename "$vol_file") -C /data" \
-          || { log ERROR "Failed to restore $vol"; return 1; }
-        log INFO "Volume $vol restored"
-    done
+    log INFO "Start working on $N8N_DIR ..."
+    cd "$N8N_DIR" || { log ERROR "Failed to change directory to $N8N_DIR"; return 1; }
 
-    # Restore .env and docker-compose.yml if present
-    if [[ -f "$restore_dir/.env.bak" ]]; then
-        cp "$restore_dir/.env.bak" "$N8N_DIR/.env"
-        log INFO "Restored .env file to $N8N_DIR/.env"
-    fi
+	log INFO "Starting PostgreSQL first..."
+	docker compose -f "$N8N_DIR/docker-compose.yml" up -d postgres \
+ 		|| { log ERROR "Failed to start postgres"; return 1; }
+	log INFO "Waiting for postgres to be healthy..."
+ 	check_container_healthy "postgres" || return 1
 
-    if [[ -f "$restore_dir/docker-compose.yml.bak" ]]; then
-        cp "$restore_dir/docker-compose.yml.bak" "$N8N_DIR/docker-compose.yml"
-        log INFO "Restored docker-compose.yml to $N8N_DIR/docker-compose.yml"
-    fi
+ 	# Database
+	local PG_CONT="postgres"
+	local DB_USER="${DB_POSTGRESDB_USER:-${POSTGRES_USER:-n8n}}"
+	local DB_NAME="${DB_POSTGRESDB_DATABASE:-${POSTGRES_DB:-n8n}}"
+	
+ 	local POSTGRES_RESTORE_MODE=""
+	if [[ -n "${sql_file:-}" ]]; then
+ 		POSTGRES_RESTORE_MODE="dump"
+		log INFO "SQL dump found: $(basename "$sql_file"). Will restore via psql."
+		log INFO "Terminating active connections to ${DB_NAME}..."
+		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c \
+			"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" || true
 
-    # Restart services
-    log INFO "Starting Docker Compose..."
-    cd "$N8N_DIR" || { log ERROR "Failed to change directory to $N8N_DIR"; exit 1; }
-	docker compose up -d || { log ERROR "docker-compose up failed"; return 1; }
+		log INFO "Dropping & recreating database ${DB_NAME}..."
+		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB_NAME};"
+		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
 
-    if ! check_containers_healthy; then
-        log ERROR "Some containers are not running or unhealthy. Stop restoration!"
-        return 1
-    fi
-
-    # Restore Postgres SQL dump (if available)
-    local sql_file=$(find "$restore_dir" -name "n8n_postgres_dump_*.sql")
-    if [[ -n "$sql_file" ]]; then
-        log INFO "Dropping and recreating the n8ndb database to avoid restore conflicts..."
-
-		local DB_NAME="${DB_POSTGRESDB:-${POSTGRES_DB:-n8ndb}}"
-		docker exec postgres psql -U n8n -c "DROP DATABASE IF EXISTS ${DB_NAME};"
-		docker exec postgres psql -U n8n -c "CREATE DATABASE ${DB_NAME} OWNER n8n;"
-		cat "$sql_file" | docker exec -i postgres psql -U n8n -d "${DB_NAME}"
-
-        log INFO "Restoring PostgreSQL DB from $sql_file"
-        cat "$sql_file" | docker exec -i postgres psql -U n8n -d n8ndb
-    else
-        log INFO "No Postgres SQL dump found. Assuming volume data is intact."
-    fi
+		log INFO "Restoring PostgreSQL DB from dump (single import)..."
+		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d "${DB_NAME}" -v ON_ERROR_STOP=1 < "$sql_file"
+	else
+		POSTGRES_RESTORE_MODE="volume"
+  		log INFO "No SQL dump found. Assuming the postgres-data volume already contains the DB. Skipping SQL import."
+	fi
+ 
+	# When the PostgreSQL DB is ready, start other containers
+	log INFO "Starting the rest of the stack..."
+	docker compose -f "$N8N_DIR/docker-compose.yml" up -d || { log ERROR "docker compose up failed"; return 1; }
 
     log INFO "Checking services running and healthy after restoring backup..."
     if ! check_services_up_running; then
         log ERROR "Some services and Traefik are not running or unhealthy after restoring the backup"
         log ERROR "Restore the backup failed."
         log INFO "Log File: $LOG_FILE"
-        exit 1
+        return 1
     else
        log INFO "Services running and healthy"
     fi
-    
-    # Cleanup temp
+
+    log INFO "Cleaning up..."
     rm -rf "$restore_dir"
 
     N8N_VERSION=$(get_current_n8n_version)
+ 	local restored_list=""
+	if ((${#VOLUMES[@]})); then
+		restored_list=$(printf '%s, ' "${VOLUMES[@]}")
+		restored_list=${restored_list%, }
+	else
+		restored_list="(none)"
+	fi
     echo "═════════════════════════════════════════════════════════════"
 	echo "Restore completed successfully."
     echo "Domain:               https://${DOMAIN}"
     echo "Restore from file:    $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
+	echo "N8N Directory:        $N8N_DIR"
     echo "Log File:             $LOG_FILE"
     echo "Timestamp:            $DATE"
-    echo "Volumes Restored:     n8n-data, postgres-data, letsencrypt"
-    echo "PostgreSQL:           Restored from SQL dump"
+	echo "Volumes restored:     ${restored_list}"
+	if [[ "$POSTGRES_RESTORE_MODE" == "dump" ]]; then
+		echo "PostgreSQL:           Restored from SQL dump"
+	else
+		echo "PostgreSQL:           Restored from volume"
+	fi
     echo "═════════════════════════════════════════════════════════════"
 }
 
@@ -884,6 +983,10 @@ require_cmd() {
 require_cmd docker
 require_cmd rsync
 require_cmd tar
+require_cmd curl
+require_cmd openssl
+require_cmd dig
+require_cmd base64
 
 # Only require msmtp if we might send mail
 if [[ -n "$EMAIL_TO" ]]; then
