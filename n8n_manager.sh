@@ -9,16 +9,16 @@ IFS=$'\n\t'
 # Date: 2025-08-05
 #
 # Description:
-#   Automates the installation, upgrade, and cleanup of the n8n automation
-#   platform using Docker Compose.
+#   Automates install, upgrade, and cleanup of the n8n stack (Docker Compose).
 #
-# Features:
-#   - Validates domain DNS resolution
-#   - Installs Docker and Docker Compose if not present
+# Key features:
+#   - Validates domain DNS resolution (IPv4/IPv6) without requiring dnsutils
+#   - Installs Docker & Compose v2 if missing
 #   - Creates persistent Docker volumes
-#   - Starts n8n services with health and certificate checks
-#   - Supports force-upgrade option
-#   - Cleans up containers, volumes, and networks completely
+#   - Starts stack and checks container health + TLS certificate (Traefik/LE)
+#   - Forces upgrade/downgrade with -f
+#   - Cleanup with optional -y (no prompt)
+#   - Tag discovery on Docker Hub, validation on docker.n8n.io/docker.io
 #
 # Usage:
 #   ./n8n_manager.sh -i <DOMAIN> [-l INFO|DEBUG]    # Install n8n with specified domain
@@ -30,13 +30,21 @@ IFS=$'\n\t'
 #   ./n8n_manager.sh -c                             # Cleanup n8n containers and volumes
 #############################################################################################
 trap 'on_interrupt' INT
+trap 'on_error' ERR
 
 # Catches Ctrl+C (SIGINT) and gracefully shuts down running containers before exiting
 on_interrupt() {
-    log ERROR "Interrupted by user. Stopping containers and exiting..."
-    if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
-        cd "$N8N_DIR"
-        docker compose down || true
+    log ERROR "Interrupted by user (SIGINT). Stopping containers and exiting..."
+    if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
+        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" down) || true
+    fi
+    exit 1
+}
+
+on_error() {
+    log ERROR "Unhandled error on line ${BASH_LINENO[0]} (last cmd: ${BASH_COMMAND})"
+    if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
+        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" ps) || true
     fi
     exit 1
 }
@@ -177,9 +185,10 @@ prepare_compose_file() {
         [[ -z "$target_version" ]] && { log ERROR "Could not determine latest n8n tag."; exit 1; }
     fi
 
-    # Validate the tag exists (fail fast if user passed a bad one)
-    if ! docker manifest inspect "docker.n8n.io/n8nio/n8n:${target_version}" >/dev/null 2>&1; then
-        log ERROR "Image tag docker.n8n.io/n8nio/n8n:${target_version} not found on the registry."
+    # Validate tag exists on at least one registry
+    if ! docker manifest inspect "docker.n8n.io/n8nio/n8n:${target_version}" >/dev/null 2>&1 \
+        && ! docker manifest inspect "docker.io/n8nio/n8n:${target_version}" >/dev/null 2>&1; then
+        log ERROR "Image tag not found on docker.n8n.io nor docker.io: ${target_version}"
         exit 1
     fi
 
@@ -209,6 +218,8 @@ prepare_compose_file() {
 strict_env_check() {
     local compose_file="$1"
     local env_file="$2"
+    local vars_in_compose
+    local -a missing_vars=()
 
     # Load .env variables
     if [[ -f "$env_file" ]]; then
@@ -336,7 +347,12 @@ install_docker() {
 
 # Returns the currently running version of n8n from the Docker container
 get_current_n8n_version() {
-    docker exec n8n n8n --version 2>/dev/null
+    local cid
+    cid=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q n8n 2>/dev/null || true)
+    if [[ -n "$cid" ]]; then
+        docker exec "$cid" n8n --version 2>/dev/null && return 0
+    fi
+    docker exec n8n n8n --version 2>/dev/null || echo "unknown"
 }
 
 # Fetches the latest stable n8n version tag from Docker Hub
@@ -367,22 +383,27 @@ create_volumes() {
 run_docker_compose() {
     log INFO "Starting Docker Compose..."
     cd "$N8N_DIR"
-    docker compose up -d
+    docker compose -f "$N8N_DIR/docker-compose.yml" up -d
 }
 
 # Waits for all containers to reach a healthy state within a timeout window
-check_containers_healthy() {
-    timeout=180
-    interval=10
-    elapsed=0
+################################################################################
+# wait_for_containers_healthy()
+#   Polls defined containers until they’re all running & healthy (or times out).
+################################################################################
+wait_for_containers_healthy() {
+	local timeout="${1:-180}"
+	local interval="${2:-10}"
+ 	local containers all_ok name status health
+    local elapsed=0
 
     log INFO "Checking container status..."
 
     while [ $elapsed -lt $timeout ]; do
-        log INFO "Status check at $(date +"%H:%M:%S")..."
+        log INFO "Status check at $(date +%T)..."
         all_ok=true
-        docker compose ps        
-        containers=$(docker compose ps -q)
+        docker compose -f "$N8N_DIR/docker-compose.yml" ps
+		containers=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q)
 
         for container_id in $containers; do
             name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
@@ -503,7 +524,7 @@ verify_traefik_certificate() {
 
 # Combines container health and optional certificate checks to confirm stack is operational
 check_services_up_running() {
-    if ! check_containers_healthy; then
+    if ! wait_for_containers_healthy; then
         log ERROR "Some containers are not running or unhealthy. Please check the logs above."
         exit 1
     fi
@@ -538,6 +559,7 @@ upgrade_n8n() {
       apt-get update && apt-get install -y jq
     fi
 
+    local current_version target_version
     current_version=$(get_current_n8n_version || echo "0.0.0")
     # Decide target version
     local target_version="$N8N_VERSION"
@@ -563,14 +585,25 @@ upgrade_n8n() {
         exit 0
     fi
 
+    # Validate tag exists (either registry)
+    if ! docker manifest inspect "docker.n8n.io/n8nio/n8n:${target_version}" >/dev/null 2>&1 \
+        && ! docker manifest inspect "docker.io/n8nio/n8n:${target_version}" >/dev/null 2>&1; then
+        log ERROR "Image tag '${target_version}' not found on docker.n8n.io nor docker.io"
+        exit 1
+    fi
+
+    # Pull with fallback (useful if compose references docker.n8n.io)
+    log INFO "Pulling docker.n8n.io/n8nio/n8n:$target_version (fallback to docker.io if needed)…"
+    if ! docker pull "docker.n8n.io/n8nio/n8n:$target_version" >/dev/null 2>&1; then
+        log WARN "Failed to pull from docker.n8n.io, trying docker.io/n8nio/n8n..."
+        docker pull "docker.io/n8nio/n8n:$target_version"
+    fi
+
     # Pin the tag into .env (insert or update)
     upsert_env_var "N8N_IMAGE_TAG" "$target_version" "$N8N_DIR/.env"
 
-    log INFO "Pulling n8nio/n8n:$target_version and deploying…"
-    docker compose pull n8n || docker compose pull
-
     log INFO "Stopping and removing existing containers..."
-    docker compose down
+    docker compose -f "$N8N_DIR/docker-compose.yml" down
 
     validate_compose_and_env
     run_docker_compose
@@ -583,7 +616,12 @@ cleanup_n8n() {
     read -p "This will remove ALL n8n containers/volumes/images. Continue? [y/N] " ans
     [[ "${ans,,}" == "y" ]] || { log INFO "Cleanup cancelled."; return 0; }
     log INFO "Stopping containers and removing containers, volumes, and orphan services..."
-    docker compose down --remove-orphans
+    if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
+        docker compose -f "$N8N_DIR/docker-compose.yml" down --remove-orphans
+    else
+        log WARN "docker-compose.yml not found at \$N8N_DIR; attempting plain 'docker compose down' in $PWD."
+        docker compose down --remove-orphans
+    fi
 
     log INFO "Pruning unused Docker images..."
     docker image prune -f
