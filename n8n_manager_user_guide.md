@@ -93,11 +93,11 @@ sudo ./n8n_manager.sh -i n8n.YourDomain.com -v  1.105.3 (install the version 1.1
 
 When prompted, enter your email (used for SSL).
 ```
-   root@ubuntu-s-1vcpu-1gb-01:~/n8n-main# ./n8n_manager.sh -i n8n.YourDomain.com
-   [INFO] Working on directory: /root/n8n-main
-   [INFO] Logging to /root/n8n-main/logs/n8n_manager.log
-   [INFO] Starting N8N installation for domain: n8n.YourDomain.com
-   Enter your email address (used for SSL cert): you@YourDomain.com
+root@ubuntu-s-1vcpu-1gb-01:~/n8n-main# ./n8n_manager.sh -i n8n.YourDomain.com
+[INFO] Working on directory: /root/n8n-main
+[INFO] Logging to /root/n8n-main/logs/n8n_manager.log
+[INFO] Starting N8N installation for domain: n8n.YourDomain.com
+Enter your email address (used for SSL cert): you@YourDomain.com
 ```
 
 Or provide your SSL email inline (no prompt)
@@ -116,18 +116,18 @@ The script will:
    6. **Wait for health checks** to pass.
 
 At the end, you’ll see a summary with your URL, version, and log file path.
-   ```
-   ─────────────────────────────────────────────────────────
-   N8N has been successfully installed!
-   Domain:             https://n8n.YourDomain.com
-   Installed Version:  1.105.3
-   Install Timestamp:  2025-08-13 10:42:14
-   Installed By:       root
-   Target Directory:   /root/n8n-main
-   SSL Email:          you@YourDomain.com
-   Execution log:      /root/n8n-main/logs/n8n_manager.log
-   ─────────────────────────────────────────────────────────
-   ```
+```
+─────────────────────────────────────────────────────────
+N8N has been successfully installed!
+Domain:             https://n8n.YourDomain.com
+Installed Version:  1.105.3
+Install Timestamp:  2025-08-13 10:42:14
+Installed By:       root
+Target Directory:   /root/n8n-main
+SSL Email:          you@YourDomain.com
+Execution log:      /root/n8n-main/logs/n8n_manager.log
+─────────────────────────────────────────────────────────
+```
 ---
 
 ## Upgrade n8n
@@ -151,18 +151,18 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
 ```
 
 - On success, you’ll see:
-  ```
-   ─────────────────────────────────────────────────────────
-   N8N has been successfully upgraded!
-   Domain:             https://n8n.YourDomain.com
-   Installed Version:  1.106.3
-   Install Timestamp:  2025-08-13 10:42:14
-   Installed By:       root
-   Target Directory:   /root/n8n-main
-   SSL Email:          you@YourDomain.com
-   Execution log:      /root/n8n-main/logs/n8n_manager.log
-   ─────────────────────────────────────────────────────────
-  ```
+```
+─────────────────────────────────────────────────────────
+N8N has been successfully upgraded!
+Domain:             https://n8n.YourDomain.com
+Installed Version:  1.106.3
+Install Timestamp:  2025-08-13 10:42:14
+Installed By:       root
+Target Directory:   /root/n8n-main
+SSL Email:          you@YourDomain.com
+Execution log:      /root/n8n-main/logs/n8n_manager.log
+─────────────────────────────────────────────────────────
+```
 
 **Notes:**
 - If you **omit `-v`** (or pass `latest`), the script resolves the latest stable tag and updates `.env` to that version.
