@@ -9,9 +9,31 @@ Simple, reliable backups and restores for an **n8n (Docker)** stack—with optio
 
 ---
 
-## Overview
+## Table of Contents
 
-**What this script does:**
+- [What this script does](#what-this-script-does)
+- [Folder basics](#folder-basics)
+- [Requirements (one‑time)](#requirements-one-time)
+- [Email notifications (optional but recommended)](#email-notifications-optional-but-recommended)
+- [Google Drive uploads (optional)](#google-drive-uploads-optional)
+- [Quick start (most common)](#quick-start-most-common)
+  - [Normal backup (skip if nothing changed)](#1-normal-backup-skip-if-nothing-changed)
+  - [Force a backup (even with no changes)](#2-force-a-backup-even-with-no-changes)
+  - [Restore from a backup file](#3-restore-from-a-backup-file)
+- [Command options (cheat‑sheet)](#command-options-cheat-sheet)
+- [What to expect after a backup](#what-to-expect-after-a-backup)
+- [How change detection works](#how-change-detection-works)
+- [Restore (step by step)](#restore-step-by-step)
+- [Scheduling (automatic daily backups)](#scheduling-automatic-daily-backups)
+- [Google Drive path tips](#google-drive-path-tips)
+- [Where to check logs](#where-to-check-logs)
+- [Common examples](#common-examples)
+- [Troubleshooting & FAQs](#troubleshooting--faqs)
+- [Safety notes](#safety-notes)
+- [Support](#support)
+
+---
+## What this script does
 
 - Backs up Docker **volumes**: `n8n-data`, `postgres-data`, `letsencrypt`
 - Creates a **PostgreSQL dump** (from the `postgres` container, DB `n8n`)
