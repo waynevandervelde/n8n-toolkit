@@ -439,7 +439,7 @@ print_summary_message() {
 # Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
 verify_traefik_certificate() {
     local domain_url="https://${DOMAIN}"
-    local MAX_RETRIES=5
+    local MAX_RETRIES=6
     local SLEEP_INTERVAL=10
 
     log INFO "Checking DNS resolution for domain..."
