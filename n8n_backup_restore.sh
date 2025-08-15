@@ -97,6 +97,7 @@ send_email() {
     return 1
   fi
 
+  log INFO "Sending email to: $EMAIL_TO"
   # Generate a random boundary
   local boundary="=====n8n_backup_$(date +%s)_$$====="
   {
@@ -140,9 +141,9 @@ send_email() {
       "$EMAIL_TO"
 
   if [[ $? -eq 0 ]]; then
-    log INFO "Email sent: $subject"
+    log INFO "Email sent with subject: $subject"
   else
-    log WARN "Failed to send email: $subject"
+    log WARN "Failed to send email with subject: $subject"
   fi
 }
 
@@ -511,10 +512,10 @@ See log at $LOG_FILE"
 }
 
 ################################################################################
-# print_summary()
+# print_backup_summary()
 #   Print a human-readable summary of what just happened.
 ################################################################################
-print_summary() {
+print_backup_summary() {
 	local summary_file="$BACKUP_DIR/backup_summary.md"
     local email_note
 	log INFO "Print a summary of what happened..."
@@ -528,6 +529,7 @@ print_summary() {
 
     echo "═════════════════════════════════════════════════════════════"
     printf "Action:               %s\n"   "$ACTION"
+	printf "Status:               %s\n"   "$BACKUP_STATUS"
     printf "Timestamp:            %s\n"   "$DATE"
     printf "Domain:               https://%s\n" "$DOMAIN"
     [[ -n "$BACKUP_FILE" ]] && printf "Backup file:          %s/%s\n" "$BACKUP_DIR" "$BACKUP_FILE"
@@ -585,7 +587,7 @@ backup_n8n() {
         log INFO "No changes detected; skipping backup."
         write_summary "$ACTION" "$BACKUP_STATUS"
         send_mail_on_action
-        print_summary
+        print_backup_summary
         return 0
     fi
 
@@ -601,7 +603,7 @@ backup_n8n() {
         UPLOAD_STATUS="SKIPPED"
         write_summary "$ACTION" "$BACKUP_STATUS"
         send_mail_on_action
-        print_summary
+        print_backup_summary
         return 1
     fi
 
@@ -618,7 +620,7 @@ backup_n8n() {
     send_mail_on_action
 
     # Console summary
-    print_summary
+    print_backup_summary
 }
 
 ################################################################################
@@ -858,8 +860,8 @@ restore_n8n() {
     rm -rf "$restore_dir"
 
     N8N_VERSION=$(get_current_n8n_version)
-    log INFO "Restore completed successfully."
     echo "═════════════════════════════════════════════════════════════"
+	echo "Restore completed successfully."
     echo "Domain:               https://${DOMAIN}"
     echo "Restore from file:    $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
