@@ -20,7 +20,7 @@ Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgr
 - [Troubleshooting](#troubleshooting)
 ---
 
-## 📖 Introduction
+## Introduction
 
 The **n8n Manager** script automates the entire lifecycle of your n8n deployment:
 
@@ -30,7 +30,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
 1. **Linux Server**  
    Ubuntu 20.04+ or Debian with root (or sudo) access.
@@ -52,7 +52,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 1. **Download the Script**  
    ```bash
@@ -80,7 +80,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    ```
 ---
 
-## 🔧 Install n8n
+## Install n8n
 
 1. Command to install n8n
 
@@ -130,7 +130,7 @@ At the end, you’ll see a summary with your URL, version, and log file path.
    ```
 ---
 
-## 🔄 Upgrade n8n
+## Upgrade n8n
 
 **Upgrade to the latest stable version:**
 
@@ -171,7 +171,7 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
 
 ---
 
-## ⚙️ Advanced Options
+## Advanced Options
 
 - **Target Directory**: By default, uses the current folder. To change:
   ```bash
@@ -186,7 +186,7 @@ All logs are written to `/home/n8n/logs/n8n_manager.log`.
 
 ---
 
-## 🧹 Cleanup
+## Cleanup
 
 If you need to completely remove n8n and start over:
 
@@ -198,7 +198,7 @@ sudo ./n8n_manager.sh -c
 
 ---
 
-## 🗂️ Logs and Status
+## Logs and Status
 
 - **Main log file:** `/root/n8n-main/logs/n8n_manager.log`  
 - **Check container health:**
@@ -209,7 +209,7 @@ sudo ./n8n_manager.sh -c
 
 ---
 
-## 🤝 Troubleshooting
+## Troubleshooting
 
 1. **View recent logs:**
    ```bash
