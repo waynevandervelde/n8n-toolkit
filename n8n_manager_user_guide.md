@@ -32,36 +32,36 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 ## Prerequisites
 
-1. **Linux Server**  
+1. **Linux Server**
    Ubuntu 20.04+ or Debian with root (or sudo) access.
 
-2. **Domain/Subdomain**  
+2. **Domain/Subdomain**
    e.g. `n8n.example.com`.
 
-3. **DNS A Record**  
+3. **DNS A Record**
    In your DNS provider dashboard:
    - Create an A record for your domain/subdomain
    - Point it at your server’s **public IP**
    - Wait a few minutes for DNS changes to propagate
 
-4. **Open Ports**  
+4. **Open Ports**
    Ensure ports **80** (HTTP) and **443** (HTTPS) are open in your cloud firewall or server firewall.
 
-5. **Email Address**  
+5. **Email Address**
    A valid email (e.g. `you@company.com`) for SSL certificate registration.
 
 ---
 
 ## Getting Started
 
-1. **Download the Script**  
+1. **Download the Script**
    ```bash
    apt install unzip
    curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip && unzip n8n.zip && cd n8n-main && chmod +x *.sh
    ```
    Note: After unzipping, GitHub appends "-main" to the folder name n8n. In this case, it’s n8n-main.
 
-2. **Run Help**  
+2. **Run Help**
    ```bash
    sudo ./n8n_manager.sh -h
    ```
@@ -82,7 +82,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 
 ## Install n8n
 
-1. Command to install n8n
+1. **Command to install n8n**
 
 Interactive email prompt:
 ```bash
@@ -105,7 +105,7 @@ Or provide your SSL email inline (no prompt)
 ```bash
 sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com
 ```
-2. Installation Flow
+2. **Installation Flow**
 
 The script will:
    1. **Enter your email** for SSL notifications (if the argument -m was not specified)
@@ -218,10 +218,6 @@ sudo ./n8n_manager.sh -c
 2. **Verify DNS:**
    ```bash
    dig +short n8n.YourDomain.com
-   ```
-3. **Check firewall:**
-   ```bash
-   sudo ufw status
    ```
 
 Thank you for using **n8n Manager**! If you encounter any issues, please open an issue on the GitHub repo or email [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com). 🎉
