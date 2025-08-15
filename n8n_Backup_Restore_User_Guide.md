@@ -181,7 +181,7 @@ cat /home/n8n/backups/backup_summary.md
 ### 3) Force a backup (even with no changes)
 
 ```bash
-./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
+./n8n_backup_restore.sh -b -f -d /home/n8n -e you@gmail.com -s gdrive-user -t n8n-backups
 ```
 
 ### 4) Restore from a backup file
@@ -263,7 +263,7 @@ What it does:
 - Restores volume archives and the saved `.env` / `docker-compose.yml` (if present)
 - Brings the stack back up
 
-> ⚠️ Make sure your `.env` database name matches the one you restore into.\
+> ⚠️ Make sure your `.env` database name matches the one you restore into.
 
 Example success output (when SQL dump is found):
   ```bash
@@ -428,25 +428,25 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 - Backup to Drive, email on failures only:
 
   ```bash
-  ./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -d /home/n8n -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Backup to Drive, **always** email (success or failure):
 
   ```bash
-  ./n8n_backup_restore.sh -b -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -d /home/n8n -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Force a backup even if unchanged:
 
   ```bash
-  ./n8n_backup_restore.sh -b -f
+  ./n8n_backup_restore.sh -b -f -d /home/n8n
   ```
 
 - Restore from a specific file:
 
   ```bash
-  ./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
+  ./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz -d /home/n8n
   ```
 
 ---
