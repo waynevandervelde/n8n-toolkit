@@ -35,7 +35,7 @@ Simple, reliable backups and restores for an **n8n (Docker)** stack—with optio
 - Backs up Docker **volumes**: `n8n-data`, `postgres-data`, `letsencrypt`
 - Creates a **PostgreSQL dump** (from the `postgres` container, DB `n8n`)
 - Saves copies of your `` and ``
-- **Skips** backup automatically if nothing changed (unless you force it)
+- **Skips** backup automatically if nothing has changed (unless you force it)
 - Keeps a rolling **30‑day summary** in `backups/backup_summary.md`
 - Optionally **uploads** backups to **Google Drive** via `rclone`
 - Sends **email alerts** through Gmail SMTP (**msmtp**) — with the log file attached on failures (and optionally on success)
@@ -54,7 +54,6 @@ Run the script from your n8n project folder (the one that contains your `docker-
 ├── backups/           # created automatically (archives + summary + snapshot)
 └── logs/              # created automatically (run logs)
 ```
-
 ---
 
 ## Requirements (one‑time)
@@ -137,7 +136,7 @@ You’ll pass these when running:
 cd /root/n8n-main
 export SMTP_USER="you@YourDomain.com"
 export SMTP_PASS="app_password"
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
+./n8n_backup_restore.sh -b -d /home/n8n -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
 ```
 
 - On backup success, you’ll see:
@@ -155,10 +154,10 @@ export SMTP_PASS="app_password"
 Action:               Backup (normal)
 Timestamp:            2025-08-14_00-36-05
 Domain:               https://n8n.YourDomain.com
-Backup file:          /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
+Backup file:          /home/n8n/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
 N8N Version:          1.107.0
-Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-36-05.log
-Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Log File:             /home/n8n/logs/backup_n8n_2025-08-14_00-36-05.log
+Daily tracking:       /home/n8n/backups/backup_summary.md
 Uploaded to Google:   SUCCESS
 Folder link:          https://drive.google.com/drive/folders/1LjIIfFb6MD0QoVUR45B4gsi3CL87tWic
 Email notify sent:    Yes
@@ -167,7 +166,7 @@ Email notify sent:    Yes
 - You can check the daily backup status:
   
 ```bash
-cat /root/n8n-main/backups/backup_summary.md
+cat /home/n8n/backups/backup_summary.md
 | DATE               | ACTION         | N8N_VERSION | STATUS   |
 |--------------------|----------------|-------------|----------|
 | 2025-08-13_02-00-00 | Backup (normal) | 1.107.0 | SUCCESS |
@@ -189,7 +188,7 @@ cat /root/n8n-main/backups/backup_summary.md
 
 ```bash
 # Replace the path with your actual file name in /your/project/backups
-./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
+./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
 ```
 
 ---
@@ -225,6 +224,7 @@ It looks for differences in:
 
 If nothing changed since the last successful backup, it **skips** (unless you use `-f`).
 
+> When restoring from a backup with a SQL dump, postgres-data is ignored during volume restore, so its changes do not affect change detection for that restore run.
 > After each successful backup, the snapshot is refreshed automatically.
 
 Example logs:
@@ -236,8 +236,8 @@ Action:               Skipped
 Timestamp:            2025-08-14_00-46-17
 Domain:               https://n8n.YourDomain.com
 N8N Version:          1.107.0
-Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-46-17.log
-Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Log File:             /home/n8n/logs/backup_n8n_2025-08-14_00-46-17.log
+Daily tracking:       /home/n8n/backups/backup_summary.md
 Uploaded to Google:   SKIPPED
 Email notify sent:    No
 ═════════════════════════════════════════════════════════════
@@ -252,32 +252,45 @@ Email notify sent:    No
 2. Run:
 
 ```bash
-./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz
+./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
 ```
 
 What it does:
 
 - Stops current stack (`docker compose down --volumes --remove-orphans`)
-- Removes volumes `n8n-data`, `postgres-data`, `letsencrypt`
+- If a SQL dump is found: skips restoring the postgres-data volume to avoid conflicts, restores only other volumes, then imports DB from dump.
+- If a SQL dump is not found: restores all volumes, including postgres-data.
 - Restores volume archives and the saved `.env` / `docker-compose.yml` (if present)
 - Brings the stack back up
-- If it finds a SQL dump file, it:
-  - Drops and recreates the `database`, and restores it
 
 > ⚠️ Make sure your `.env` database name matches the one you restore into.\
-> This script restores the dump into ``. If your app uses `DB_POSTGRESDB=n8n`, either update `.env` to `n8ndb` or adjust the script/restore step accordingly.
 
-On restore success, you’ll see:
+Example success output (when SQL dump is found):
   ```bash
-[INFO] Restore completed successfully.
 ═════════════════════════════════════════════════════════════
+Restore completed successfully.
 Domain:               https://n8n-test.nguyenminhthe.com
-Restore from file:    /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
+Restore from file:    /home/n8n/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
 N8N Version:          1.107.0
-Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
+N8N Directory:        /home/n8n
+Log File:             /home/n8n/logs/restore_n8n_2025-08-13_16-39-54.log
+Timestamp:            2025-08-13_16-39-54
+Volumes Restored:     n8n-data, letsencrypt
+PostgreSQL:           Restored from SQL dump
+═════════════════════════════════════════════════════════════
+```
+Example success output (when no SQL dump is found):
+```bash
+═════════════════════════════════════════════════════════════
+Restore completed successfully.
+Domain:               https://n8n-test.nguyenminhthe.com
+Restore from file:    /home/n8n/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
+N8N Version:          1.107.0
+N8N Directory:        /home/n8n
+Log File:             /home/n8n/logs/restore_n8n_2025-08-13_16-39-54.log
 Timestamp:            2025-08-13_16-39-54
 Volumes Restored:     n8n-data, postgres-data, letsencrypt
-PostgreSQL:           Restored from SQL dump
+PostgreSQL:           Skipped SQL import (DB from postgres-data volume)
 ═════════════════════════════════════════════════════════════
 ```
 ---
