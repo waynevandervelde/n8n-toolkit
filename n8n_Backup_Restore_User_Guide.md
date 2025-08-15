@@ -9,7 +9,9 @@ Simple, reliable backups and restores for an **n8n (Docker)** stack—with optio
 
 ---
 
-## What this script does
+## Overview
+
+**What this script does:**
 
 - Backs up Docker **volumes**: `n8n-data`, `postgres-data`, `letsencrypt`
 - Creates a **PostgreSQL dump** (from the `postgres` container, DB `n8n`)
@@ -110,7 +112,7 @@ You’ll pass these when running:
 
 ### 2) Normal backup (skip if nothing changed)
 
-- Execute the backup, upload to google drive and always send email to notify the status:
+- Execute the backup, upload to Google Drive, and always send an email to notify of the status:
 
 ```bash
 cd /root/n8n-main
@@ -241,7 +243,7 @@ What it does:
 - Restores volume archives and the saved `.env` / `docker-compose.yml` (if present)
 - Brings the stack back up
 - If it finds a SQL dump file, it:
-  - Drops and recreates the `` database, and restores into it
+  - Drops and recreates the `database`, and restores it
 
 > ⚠️ Make sure your `.env` database name matches the one you restore into.\
 > This script restores the dump into ``. If your app uses `DB_POSTGRESDB=n8n`, either update `.env` to `n8ndb` or adjust the script/restore step accordingly.
@@ -286,6 +288,12 @@ sudo chmod +x /root/n8n-main/run_backup.sh
 
 - Schedule it daily at 02:00 (server’s local time)
 
+Use **cron**
+```bash
+crontab -e
+```
+
+Add:
 ```cron
 0 2 * * * /root/n8n-main/run_backup.sh
 ```
@@ -293,9 +301,14 @@ sudo chmod +x /root/n8n-main/run_backup.sh
 - Want a weekly forced backup as well? Add this extra line to force on Sundays:
 
 ```cron
-15 2 * * 0 /root/n8n-main/n8n_backup_restore.sh -b -f -e you@YourDomain.com -s gdrive-user -t n8n-backups >> /root/n8n-main/logs/cron.log 2>&1
+15 2 * * 0 /root/n8n-main/run_backup.sh
 ```
 ---
+
+- Check if the crontab was set up correctly:
+```cron
+crontab -l
+```
 
 2. Use systemd timer (resilient & survives reboots)
 
@@ -365,7 +378,7 @@ tail -n 200 /root/n8n/logs/systemd-backup.log
 rclone delete --min-age 7d gdrive-user:n8n-backups
 ```
 
-(The script runs that automatically after each upload.)
+(The script runs automatically after each upload.)
 
 ---
 
@@ -447,7 +460,7 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 
 - The archive includes your **database dump** and ``. Treat backups as **sensitive**.
 - Keep enough **disk space**—archives can be large, depending on your volumes.
-- Test your **restore** at least once so you know the steps and your `.env` database name align with the restore.
+- Test your **restore** at least once so you know the steps and your `.env` database name aligns with the restore.
 
 ---
 
