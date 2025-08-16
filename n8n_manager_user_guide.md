@@ -67,7 +67,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    Note: After unzipping, GitHub appends "-main" to the folder name n8n. In this case, it’s n8n-main.
 
 2. **Run Help**
-   ```bash
+```bash
    sudo ./n8n_manager.sh -h
    ```
    CLI quick reference (most‑used flags)
@@ -125,11 +125,10 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    
      ./n8n_manager.sh -c
          # Cleanup everything
-      ```
+  ```
 ---
 
 ## Install n8n
-
 
 1. **List all available n8n version**
 ```bash
@@ -158,7 +157,7 @@ sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3 -d 
 
 > ⚠️ Make sure your DNS is already propagated before running the installation. Otherwise, SSL will fail.
 
-2. **Installation Flow**
+3. **Installation Flow**
 
 The script will:
    1. **Enter your email** for SSL notifications (if the argument -m was not specified)
