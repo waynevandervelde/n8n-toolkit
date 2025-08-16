@@ -3,7 +3,7 @@
 Simple, reliable backups and restores for an **n8n (Docker)** stack—with optional Google Drive uploads and email notifications.
 
 **Script:** `n8n_backup_restore.sh`\
-**Version:** 1.1.0 \
+**Version:** 1.2.0 \
 **Last Updated:** 2025-08-10 \
 **Author:** TheNguyen · [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com)
 
@@ -426,6 +426,10 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
   ./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
   ```
 
+- Restore from a Google Drive remote path (via rclone):
+  ```bash
+  ./n8n_backup_restore.sh -r gdrive-user:n8n-backups/n8n_backup_1.107.2_2025-08-16_09-01-00.tar.gz
+  ```
 ---
 
 ## Troubleshooting & FAQs
