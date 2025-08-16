@@ -3,7 +3,7 @@
 Simple, reliable backups and restores for an **n8n (Docker)** stack—with optional Google Drive uploads and email notifications.
 
 **Script:** `n8n_backup_restore.sh`\
-**Version:** 1.2.0 \
+**Version:** 1.1.0 \
 **Last Updated:** 2025-08-10 \
 **Author:** TheNguyen · [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com)
 
@@ -131,31 +131,108 @@ You’ll pass these when running:
 
 ### 2) Normal backup (skip if nothing changed)
 
-- Execute the backup, upload to Google Drive, and always send an email to notify of the status:
-
+**Use case 01: Execute the backup at local, not upload, no email notification:**
 ```bash
-cd /root/n8n-main
-export SMTP_USER="you@YourDomain.com"
-export SMTP_PASS="app_password"
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
+./n8n_backup_restore.sh -b -d /home/n8n
+```
+On success, you will see the following logs:
+```bash
+	═════════════════════════════════════════════════════════════
+	Action:                 Backup (normal)
+	Status:                 SUCCESS
+	Timestamp:              2025-08-16_15-18-00
+	Domain:                 https://n8n-test.nguyenminhthe.com
+	Backup file:            /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-18-00.tar.gz
+	N8N Version:            1.106.3
+	Log File:               /home/n8n/logs/backup_n8n_2025-08-16_15-18-00.log
+	Daily tracking:         /home/n8n/backups/backup_summary.md
+	Google Drive upload:    SKIPPED
+	Email notification:     SKIPPED (not requested)
+	═════════════════════════════════════════════════════════════
+```
+
+If no change is detected, the backup process will be skipped; use -f to force backup.
+```bash
+	═════════════════════════════════════════════════════════════
+	Action:                 Skipped
+	Status:                 SKIPPED
+	Timestamp:              2025-08-16_15-20-34
+	Domain:                 https://n8n-test.nguyenminhthe.com
+	N8N Version:            1.106.3
+	Log File:               /home/n8n/logs/backup_n8n_2025-08-16_15-20-34.log
+	Daily tracking:         /home/n8n/backups/backup_summary.md
+	Google Drive upload:    SKIPPED
+	Email notification:     SKIPPED (not requested)
+	═════════════════════════════════════════════════════════════
+```
+
+**Use case 02: Execute the backup at local, upload to Google drive, no email notification:**
+
+- Execute the backup (skip if nothing changed), upload to Google Drive:
+```bash
+./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups
 ```
 
 - On backup success, you’ll see:
+```bash
+	═════════════════════════════════════════════════════════════
+	Action:                 Backup (normal)
+	Status:                 SUCCESS
+	Timestamp:              2025-08-16_15-28-02
+	Domain:                 https://n8n-test.nguyenminhthe.com
+	Backup file:            /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-28-02.tar.gz
+	N8N Version:            1.106.3
+	Log File:               /home/n8n/logs/backup_n8n_2025-08-16_15-28-02.log
+	Daily tracking:         /home/n8n/backups/backup_summary.md
+	Google Drive upload:    SUCCESS
+	Email notification:     SKIPPED (not requested)
+	═════════════════════════════════════════════════════════════
+```
+
+**Use case 03: Execute the backup at local, upload to Google drive, send email on failure:**
+
+- Execute the backup (force even no change), upload to Google Drive, and send the email on failure of backup/upload:
+```bash
+./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com
+```
+- On backup success, you’ll see:
+```bash
+	═════════════════════════════════════════════════════════════
+	Action:                 Backup (forced)
+	Status:                 SUCCESS
+	Timestamp:              2025-08-16_15-28-02
+	Domain:                 https://n8n-test.nguyenminhthe.com
+	Backup file:            /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-28-02.tar.gz
+	N8N Version:            1.106.3
+	Log File:               /home/n8n/logs/backup_n8n_2025-08-16_15-28-02.log
+	Daily tracking:         /home/n8n/backups/backup_summary.md
+	Google Drive upload:    FAILED
+	Email notification:     SUCCESS
+	═════════════════════════════════════════════════════════════
+```
+
+**Use case 04: Execute the backup at local, upload to Google drive, always send email:**
 
 ```bash
-═════════════════════════════════════════════════════════════
-Action:               Backup (normal)
-Timestamp:            2025-08-14_00-36-05
-Domain:               https://n8n.YourDomain.com
-Backup file:          /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
-N8N Version:          1.107.0
-Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-36-05.log
-Daily tracking:       /root/n8n-main/backups/backup_summary.md
-Google Drive upload:  SUCCESS
-Folder link:          https://drive.google.com/drive/folders/1LjIIfFb6MD0QoVUR45B4gsi3CL87tWic
-Email notification:   SUCCESS
-═════════════════════════════════════════════════════════════
+./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com --notify-on-success
 ```
+
+- On backup success, you’ll see:
+```bash
+	═════════════════════════════════════════════════════════════
+	Action:                 Backup (forced)
+	Status:                 SUCCESS
+	Timestamp:              2025-08-16_15-28-02
+	Domain:                 https://n8n-test.nguyenminhthe.com
+	Backup file:            /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-28-02.tar.gz
+	N8N Version:            1.106.3
+	Log File:               /home/n8n/logs/backup_n8n_2025-08-16_15-28-02.log
+	Daily tracking:         /home/n8n/backups/backup_summary.md
+	Google Drive upload:    SUCCESS
+	Email notification:     SUCCESS
+	═════════════════════════════════════════════════════════════
+```
+
 - You can check the daily backup status:
   
 ```bash
@@ -176,15 +253,6 @@ cat /root/n8n-main/backups/backup_summary.md
 ```bash
 ./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
 ```
-
-### 4) Restore from a backup file
-
-```bash
-# Replace the path with your actual file name in /your/project/backups
-./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
-```
-
----
 
 ## What to expect after a backup
 
@@ -238,12 +306,33 @@ Email notification:   SKIPPED
 
 **Warning:** Restore will **stop containers** and **replace volumes** with data from the archive.
 
-1. Make sure you’re in the same project directory that holds your `.env` and `docker-compose.yml`.
-2. Run:
+- Restore with the tar.gz file at local:
 
 ```bash
-./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz
+./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
+
 ```
+Example logs:
+```bash
+═════════════════════════════════════════════════════════════
+Restore completed successfully.
+Domain:               https://n8n-test.nguyenminhthe.com
+Restore from file:    /home/n8n/backups/n8n_backup_1.106.3_2025-08-15_14-41-46.tar.gz
+N8N Version:          1.106.3
+Log File:             /root/n8n-main/logs/restore_n8n_2025-08-15_14-48-53.log
+Timestamp:            2025-08-15_14-48-53
+Volumes Restored:     n8n-data, postgres-data, letsencrypt
+PostgreSQL:           Restored from SQL dump
+═════════════════════════════════════════════════════════════
+```
+
+- Restore from a Google Drive remote path (via rclone):
+
+```bash
+./n8n_backup_restore.sh -r gdrive-user:n8n-backups/n8n_backup_1.107.2_2025-08-16_09-01-00.tar.gz
+
+```
+---
 
 What it does:
 
@@ -263,7 +352,7 @@ On restore success, you’ll see:
 ═════════════════════════════════════════════════════════════
 Domain:               https://n8n-test.nguyenminhthe.com
 Restore from file:    /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
-N8N Version:          1.107.0
+N8N Version:          1.105.3
 Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
 Timestamp:            2025-08-13_16-39-54
 Volumes Restored:     n8n-data, postgres-data, letsencrypt
