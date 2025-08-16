@@ -8,7 +8,7 @@ IFS=$'\n\t'
 # N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
 # Author:      TheNguyen
 # Email:       thenguyen.ai.automation@gmail.com
-# Version:     1.2.0
+# Version:     1.1.0
 # Date:        2025-08-10
 #
 # Description:
@@ -458,7 +458,7 @@ Log File: $LOG_FILE"
         subject="$DATE: n8n Backup Succeeded; upload FAILED"
         body="Local backup succeeded as:
 
-  File: $BACKUP_FILE
+File: $BACKUP_FILE
 
 But the upload to $RCLONE_REMOTE:$RCLONE_TARGET failed.
 See log for details:
@@ -473,12 +473,21 @@ Log File: $LOG_FILE"
   Remote: $RCLONE_REMOTE:$RCLONE_TARGET
   Drive Link: ${DRIVE_LINK:-N/A}"
 
-    else
+    elif [[ "$BACKUP_STATUS" == "SUCCESS" && "$UPLOAD_STATUS" == "SKIPPED" ]]; then
+        subject="$DATE: n8n Backup SUCCESS (upload skipped)"
+        body="Local backup completed successfully.
+
+  File: $BACKUP_FILE
+  Remote upload: SKIPPED (no rclone remote/target configured)
+  
+  Log File: $LOG_FILE"
+
+	else
         subject="$DATE: n8n Backup status unknown"
         body="Backup reported an unexpected status:
   BACKUP_STATUS=$BACKUP_STATUS
   UPLOAD_STATUS=$UPLOAD_STATUS
-See log at $LOG_FILE"
+  Log File: $LOG_FILE"
     fi
 
     # 2) Decide whether to send email:
@@ -499,7 +508,6 @@ See log at $LOG_FILE"
     else
         # success & upload success: only if notify-on-success
         if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
-            # send_email "$subject" "$body"
 			send_email "$subject" "$body" "$LOG_FILE"
         fi
     fi
