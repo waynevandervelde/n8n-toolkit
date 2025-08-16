@@ -3,7 +3,7 @@
 Simple, reliable backups and restores for an **n8n (Docker)** stack—with optional Google Drive uploads and email notifications.
 
 **Script:** `n8n_backup_restore.sh`\
-**Version:** 1.0.0 \
+**Version:** 1.1.0 \
 **Last Updated:** 2025-08-10 \
 **Author:** TheNguyen · [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com)
 
@@ -35,7 +35,7 @@ Simple, reliable backups and restores for an **n8n (Docker)** stack—with optio
 - Backs up Docker **volumes**: `n8n-data`, `postgres-data`, `letsencrypt`
 - Creates a **PostgreSQL dump** (from the `postgres` container, DB `n8n`)
 - Saves copies of your `` and ``
-- **Skips** backup automatically if nothing has changed (unless you force it)
+- **Skips** backup automatically if nothing changed (unless you force it)
 - Keeps a rolling **30‑day summary** in `backups/backup_summary.md`
 - Optionally **uploads** backups to **Google Drive** via `rclone`
 - Sends **email alerts** through Gmail SMTP (**msmtp**) — with the log file attached on failures (and optionally on success)
@@ -54,6 +54,7 @@ Run the script from your n8n project folder (the one that contains your `docker-
 ├── backups/           # created automatically (archives + summary + snapshot)
 └── logs/              # created automatically (run logs)
 ```
+
 ---
 
 ## Requirements (one‑time)
@@ -119,7 +120,7 @@ You’ll pass these when running:
 | `-f`         | `--force`                | Force the backup (ignore change detection).            |
 | `-r <FILE>`  | `--restore <FILE>`       | Restore from a backup archive (`.tar.gz`).             |
 | `-d <DIR>`   | `--dir <DIR>`            | Base directory of your n8n project (default: current). |
-| `-l <LEVEL>` | `--log-level <LEVEL>`    | `DEBUG`, `INFO` (default), `WARN`, `ERROR`.            |
+| `-l <LEVEL>` | `--log-level <LEVEL>` | `DEBUG` (verbose), `INFO` (default), `WARN` (non-fatal issues), `ERROR` (only fatal). |
 | `-e <EMAIL>` | `--email <EMAIL>`        | Email recipient for notifications.                     |
 | `-s <NAME>`  | `--remote-name <NAME>`   | `rclone` remote (e.g., `gdrive-user`).                 |
 | `-t <PATH>`  | `--remote-target <PATH>` | Destination path on the remote (e.g., `n8n-backups`).  |
@@ -136,37 +137,29 @@ You’ll pass these when running:
 cd /root/n8n-main
 export SMTP_USER="you@YourDomain.com"
 export SMTP_PASS="app_password"
-./n8n_backup_restore.sh -b -d /home/n8n -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
+./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups --notify-on-success
 ```
 
 - On backup success, you’ll see:
 
 ```bash
-[INFO] Local backup succeeded: n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
-[INFO] Updating snapshot to current state…
-[INFO] Snapshot refreshed.
-[INFO] Uploading n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz to gdrive-user:n8n-backups
-[INFO] Uploaded both n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz and backup_summary.md successfully!
-[INFO] Pruning remote archives older than 7 days
-[INFO] Email sent: 2025-08-14_00-36-05: n8n Backup SUCCESS
-[INFO] Print a summary of what happened...
 ═════════════════════════════════════════════════════════════
 Action:               Backup (normal)
 Timestamp:            2025-08-14_00-36-05
 Domain:               https://n8n.YourDomain.com
-Backup file:          /home/n8n/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
+Backup file:          /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-14_00-36-05.tar.gz
 N8N Version:          1.107.0
-Log File:             /home/n8n/logs/backup_n8n_2025-08-14_00-36-05.log
-Daily tracking:       /home/n8n/backups/backup_summary.md
-Uploaded to Google:   SUCCESS
+Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-36-05.log
+Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Google Drive upload:  SUCCESS
 Folder link:          https://drive.google.com/drive/folders/1LjIIfFb6MD0QoVUR45B4gsi3CL87tWic
-Email notify sent:    Yes
+Email notification:   SUCCESS
 ═════════════════════════════════════════════════════════════
 ```
 - You can check the daily backup status:
   
 ```bash
-cat /home/n8n/backups/backup_summary.md
+cat /root/n8n-main/backups/backup_summary.md
 | DATE               | ACTION         | N8N_VERSION | STATUS   |
 |--------------------|----------------|-------------|----------|
 | 2025-08-13_02-00-00 | Backup (normal) | 1.107.0 | SUCCESS |
@@ -181,14 +174,14 @@ cat /home/n8n/backups/backup_summary.md
 ### 3) Force a backup (even with no changes)
 
 ```bash
-./n8n_backup_restore.sh -b -f -d /home/n8n -e you@gmail.com -s gdrive-user -t n8n-backups
+./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
 ```
 
 ### 4) Restore from a backup file
 
 ```bash
 # Replace the path with your actual file name in /your/project/backups
-./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
+./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
 ```
 
 ---
@@ -224,22 +217,19 @@ It looks for differences in:
 
 If nothing changed since the last successful backup, it **skips** (unless you use `-f`).
 
-> When restoring from a backup with a SQL dump, postgres-data is ignored during volume restore, so its changes do not affect change detection for that restore run.
 > After each successful backup, the snapshot is refreshed automatically.
 
 Example logs:
 ```bash
-[INFO] No changes detected; skipping backup.
-[INFO] Print a summary of what happened...
 ═════════════════════════════════════════════════════════════
 Action:               Skipped
 Timestamp:            2025-08-14_00-46-17
 Domain:               https://n8n.YourDomain.com
 N8N Version:          1.107.0
-Log File:             /home/n8n/logs/backup_n8n_2025-08-14_00-46-17.log
-Daily tracking:       /home/n8n/backups/backup_summary.md
-Uploaded to Google:   SKIPPED
-Email notify sent:    No
+Log File:             /root/n8n-main/logs/backup_n8n_2025-08-14_00-46-17.log
+Daily tracking:       /root/n8n-main/backups/backup_summary.md
+Google Drive upload:  SKIPPED
+Email notification:   SKIPPED
 ═════════════════════════════════════════════════════════════
 ```
 ---
@@ -252,45 +242,32 @@ Email notify sent:    No
 2. Run:
 
 ```bash
-./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
+./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz
 ```
 
 What it does:
 
 - Stops current stack (`docker compose down --volumes --remove-orphans`)
-- If a SQL dump is found: skips restoring the postgres-data volume to avoid conflicts, restores only other volumes, then imports DB from dump.
-- If a SQL dump is not found: restores all volumes, including postgres-data.
+- Removes volumes `n8n-data`, `postgres-data`, `letsencrypt`
 - Restores volume archives and the saved `.env` / `docker-compose.yml` (if present)
 - Brings the stack back up
+- If it finds a SQL dump file, it:
+  - Drops and recreates the `database`, and restores it
 
-> ⚠️ Make sure your `.env` database name matches the one you restore into.
+> ⚠️ Make sure your `.env` database name matches the one you restore into.\
+> This script restores the dump into ``. If your app uses `DB_POSTGRESDB=n8n`, either update `.env` to `n8ndb` or adjust the script/restore step accordingly.
 
-Example success output (when SQL dump is found):
+On restore success, you’ll see:
   ```bash
+[INFO] Restore completed successfully.
 ═════════════════════════════════════════════════════════════
-Restore completed successfully.
 Domain:               https://n8n-test.nguyenminhthe.com
-Restore from file:    /home/n8n/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
+Restore from file:    /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
 N8N Version:          1.107.0
-N8N Directory:        /home/n8n
-Log File:             /home/n8n/logs/restore_n8n_2025-08-13_16-39-54.log
-Timestamp:            2025-08-13_16-39-54
-Volumes Restored:     n8n-data, letsencrypt
-PostgreSQL:           Restored from SQL dump
-═════════════════════════════════════════════════════════════
-```
-Example success output (when no SQL dump is found):
-```bash
-═════════════════════════════════════════════════════════════
-Restore completed successfully.
-Domain:               https://n8n-test.nguyenminhthe.com
-Restore from file:    /home/n8n/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
-N8N Version:          1.107.0
-N8N Directory:        /home/n8n
-Log File:             /home/n8n/logs/restore_n8n_2025-08-13_16-39-54.log
+Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
 Timestamp:            2025-08-13_16-39-54
 Volumes Restored:     n8n-data, postgres-data, letsencrypt
-PostgreSQL:           Skipped SQL import (DB from postgres-data volume)
+PostgreSQL:           Restored from SQL dump
 ═════════════════════════════════════════════════════════════
 ```
 ---
@@ -428,25 +405,25 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 - Backup to Drive, email on failures only:
 
   ```bash
-  ./n8n_backup_restore.sh -b -d /home/n8n -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Backup to Drive, **always** email (success or failure):
 
   ```bash
-  ./n8n_backup_restore.sh -b -d /home/n8n -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
   ```
 
 - Force a backup even if unchanged:
 
   ```bash
-  ./n8n_backup_restore.sh -b -f -d /home/n8n
+  ./n8n_backup_restore.sh -b -f
   ```
 
 - Restore from a specific file:
 
   ```bash
-  ./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz -d /home/n8n
+  ./n8n_backup_restore.sh -r backups/n8n_backup_1.105.3_2025-08-10_15-31-58.tar.gz
   ```
 
 ---
@@ -505,4 +482,3 @@ If you hit a snag:
 - Or email: [**thenguyen.ai.automation@gmail.com**](mailto\:thenguyen.ai.automation@gmail.com)
 
 Happy automating!
-
