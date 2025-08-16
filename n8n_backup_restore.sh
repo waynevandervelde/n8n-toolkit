@@ -8,7 +8,7 @@ IFS=$'\n\t'
 # N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
 # Author:      TheNguyen
 # Email:       thenguyen.ai.automation@gmail.com
-# Version:     1.2.0
+# Version:     1.1.0
 # Date:        2025-08-10
 #
 # Description:
@@ -520,14 +520,14 @@ print_backup_summary() {
         email_status="SKIPPED"
         email_reason="(not requested)"
     elif $EMAIL_SENT; then
-        email_status="PASS"
+        email_status="SUCCESS"
         email_reason=""
     else
         if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
             email_status="ERROR"
             email_reason="(missing SMTP config)"
         else
-            email_status="FAIL"
+            email_status="FAILED"
             email_reason="(send failed)"
         fi
     fi
