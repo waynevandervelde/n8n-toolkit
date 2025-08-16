@@ -24,60 +24,10 @@ IFS=$'\n\t'
 #   - Troubleshooting-friendly: fails with function + line context
 #############################################################################################
 
-################################################################################
-# print_stacktrace()
-#   Helper for error diagnostics: prints a compact stack trace (most recent first).
-################################################################################
-print_stacktrace() {
-    # Skip the last frame (the trap context)
-    local depth=$(( ${#FUNCNAME[@]} - 1 ))
-    [[ $depth -lt 1 ]] && return 0
-
-    log ERROR "Stack trace (most recent call first):"
-    # i=0 is the failing function; BASH_SOURCE[i+1] is the caller's file
-    for ((i=0; i<depth; i++)); do
-        local func="${FUNCNAME[$i]:-main}"
-        local src="${BASH_SOURCE[$i+1]:-${BASH_SOURCE[0]}}"
-        local line="${BASH_LINENO[$i]:-0}"
-        log ERROR "  at ${func}()  ${src}:${line}"
-    done
-}
-
-################################################################################
-# on_interrupt()
-#   Trap for INT/TERM/HUP: logs, attempts to stop the stack cleanly, exits 130.
-################################################################################
-on_interrupt() {
-    log ERROR "Interrupted by user (SIGINT) at ${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}:${BASH_LINENO[0]:-0} in ${FUNCNAME[1]:-main}(). Stopping containers and exiting..."
-    if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
-        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" down) || true
-    fi
-    exit 130
-}
-
-################################################################################
-# on_error()
-#   Trap for ERR: logs failing command + location, prints stack, shows `ps`,
-#   exits with the original command’s exit code.
-################################################################################
-on_error() {
-    local exit_code=$?
-    local cmd="${BASH_COMMAND}"
-    local where_file="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
-    local where_line="${BASH_LINENO[0]:-0}"
-    local where_func="${FUNCNAME[1]:-main}"
-
-    log ERROR "Command failed (exit $exit_code): $cmd"
-    log ERROR "Location: ${where_file}:${where_line} in ${where_func}()"
-
-    print_stacktrace
-
-    if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
-        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" ps) || true
-    fi
-
-    exit "$exit_code"
-}
+# Load common helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/n8n_common.sh"
 
 trap 'on_interrupt' INT TERM HUP
 trap 'log INFO "Exiting (code $?)"' EXIT
@@ -94,35 +44,6 @@ TARGET_DIR=""
 N8N_VERSION="latest"
 DOMAIN=""
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
-
-################################################################################
-# log()
-#   Handles conditional logging based on the defined log level (DEBUG, INFO, WARN, ERROR)
-################################################################################
-log() {
-    local level="$1"
-    shift
-    local levels=("DEBUG" "INFO" "WARN" "ERROR")
-    local show=1
-
-    case "$LOG_LEVEL" in
-        DEBUG) show=0 ;;
-        INFO) [[ "$level" != "DEBUG" ]] && show=0 ;;
-        WARN) [[ "$level" == "WARN" || "$level" == "ERROR" ]] && show=0 ;;
-        ERROR) [[ "$level" == "ERROR" ]] && show=0 ;;
-    esac
-
-    if [[ $show -eq 0 ]]; then
-        local ts
-        ts=$(date '+%Y-%m-%d %H:%M:%S')
-        # Send WARN/ERROR to stderr so they aren't swallowed by command substitution
-        if [[ "$level" == "WARN" || "$level" == "ERROR" ]]; then
-            echo "[$ts] [$level] $*" >&2
-        else
-            echo "[$ts] [$level] $*"
-        fi
-    fi
-}
 
 ################################################################################
 # usage()
@@ -188,53 +109,6 @@ EOF
 }
 
 ################################################################################
-# check_root()
-#   Ensures the script is run as root (EUID=0). Exits if not.
-################################################################################
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        log ERROR "This script must be run as root."
-        exit 1
-    fi
-}
-
-################################################################################
-# parse_domain_arg(raw)
-#   Normalizes a domain-like string (strips scheme, path, port, www, whitespace,
-#   lowercases) and validates it against a strict hostname regex.
-#   Echoes the cleaned domain or exits(2) on invalid input.
-################################################################################
-parse_domain_arg() {
-    local raw="$1"
-    local d
-
-    # Normalize
-    d="${raw,,}"                              # lowercase
-    d="${d#"${d%%[![:space:]]*}"}"            # trim leading space
-    d="${d%"${d##*[![:space:]]}"}"            # trim trailing space
-    d="${d#http://}"; d="${d#https://}"       # strip scheme
-    d="${d%%/*}"                              # strip path (/...), if any
-    d="${d%%\?*}"                             # strip query
-    d="${d%%\#*}"                             # strip fragment
-    d="${d%%:*}"                              # strip :port
-    d="${d%.}"                                # strip trailing dot
-
-    # Strip "www."
-    [[ "$d" == www.* ]] && d="${d#www.}"
-
-    # Validate
-    # Hostname labels: a-z, 0-9, hyphen (no leading/trailing '-'), 1–63 chars per label
-    # At least one dot; TLD 2–63 letters; total length <= 253
-    local re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$'
-    if [[ -z "$d" || ${#d} -gt 253 || ! "$d" =~ $re ]]; then
-        log ERROR "Invalid domain: '$raw' → '$d'. Expected a hostname like n8n.example.com"
-        exit 2
-    fi
-
-    printf '%s\n' "$d"
-}
-
-################################################################################
 # check_domain()
 #   Verifies that provided $DOMAIN’s A record matches this server’s public IP.
 ################################################################################
@@ -271,19 +145,6 @@ check_domain() {
 }
 
 ################################################################################
-# upsert_env_var(key, value, file)
-#   Inserts or replaces KEY=VALUE in an .env file (idempotent).
-################################################################################
-upsert_env_var() {
-    local key="$1" val="$2" file="$3"
-    if grep -qE "^${key}=" "$file"; then
-        sed -i "s|^${key}=.*|${key}=${val}|" "$file"
-    else
-        printf "\n%s=%s\n" "$key" "$val" >> "$file"
-    fi
-}
-   
-################################################################################
 # get_user_email()
 #   Prompts for a valid email (RFC-ish regex) for Let's Encrypt usage.
 #   Exports SSL_EMAIL on success.
@@ -298,56 +159,6 @@ get_user_email() {
             log ERROR "Invalid email. Please try again."
         fi
     done
-}
-
-################################################################################
-# get_current_n8n_version()
-#   Determines the running n8n version by exec'ing into the n8n container.
-#   Falls back to "unknown" if not running.
-################################################################################
-get_current_n8n_version() {
-    local cid
-    cid=$(compose ps -q n8n 2>/dev/null || true)
-    if [[ -n "$cid" ]]; then
-        docker exec "$cid" n8n --version 2>/dev/null && return 0
-    fi
-    docker exec n8n n8n --version 2>/dev/null || echo "unknown"
-}
-
-################################################################################
-# get_latest_n8n_version()
-#   Fetches the latest stable semver tag from Docker Hub (n8nio/n8n).
-################################################################################
-get_latest_n8n_version() {
-    curl -fsS --connect-timeout 5 --retry 3 --retry-delay 2 \
-    'https://hub.docker.com/v2/repositories/n8nio/n8n/tags?page_size=100' \
-    | jq -r '.results[].name' \
-    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -Vr | head -n 1
-}
-
-################################################################################
-# fetch_all_stable_versions()
-#   Retrieves all stable semver tags (paginated) from Docker Hub.
-#   Prints unique, natural-sorted ascending list of x.y.z.
-################################################################################
-fetch_all_stable_versions() {
-    local url="https://registry.hub.docker.com/v2/repositories/n8nio/n8n/tags?page_size=100"
-    local next
-    local page_json
-    local all=()
-
-    while [[ -n "$url" ]]; do
-        page_json=$(curl -fsS --retry 3 --retry-delay 2 "$url")
-        # collect names that look like x.y.z
-        mapfile -t page_tags < <(jq -r '.results[].name' <<<"$page_json" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true)
-        all+=("${page_tags[@]}")
-        next=$(jq -r '.next // empty' <<<"$page_json")
-        url="$next"
-    done
-
-    # print unique, sorted ascending (natural/semantic)
-    printf "%s\n" "${all[@]}" | sort -Vu
 }
 
 ################################################################################
@@ -448,9 +259,9 @@ create_volumes() {
 prepare_compose_file() {
     # Copy docker-compose and .env template to the target dir
     local compose_template="$PWD/docker-compose.yml"
-    local compose_file="$N8N_DIR/docker-compose.yml"
     local env_template="$PWD/.env"
-    local env_file="$N8N_DIR/.env"
+    local compose_file="$COMPOSE_FILE"
+    local env_file="$ENV_FILE"
 
     if [[ ! -f "$compose_template" ]]; then
         log ERROR "docker-compose.yml not found at $compose_template"
@@ -520,114 +331,6 @@ prepare_compose_file() {
 }
 
 ################################################################################
-# load_env_file
-################################################################################
-load_env_file() {
-    if [[ -f "$ENV_FILE" ]]; then
-        set -o allexport
-        # shellcheck disable=SC1090
-        source "$ENV_FILE"
-        set +o allexport
-    fi
-}
-
-################################################################################
-# strict_env_check(compose_file, env_file)
-#   Scans the compose file for ${VARS} and verifies each exists in env_file.
-#   Prints missing keys and returns non-zero if any are absent.
-################################################################################
-strict_env_check() {
-    local compose_file="$1" env_file="$2"
-    [[ -f "$env_file" ]] || { log ERROR ".env file not found at $env_file"; return 1; }
-
-    log INFO "Checking for unset environment variables in $compose_file..."
-    local vars_in_compose missing_vars=()
-    vars_in_compose=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$compose_file" | sort -u | tr -d '${}')
-
-    # Build a map of KEYs that exist in .env (ignore comments/blank lines)
-    declare -A envmap
-    while IFS='=' read -r k v; do
-        [[ -z "$k" || "$k" =~ ^\s*# ]] && continue
-        k="${k%% *}"; k="${k%%	*}"
-        envmap["$k"]=1
-    done < "$env_file"
-
-    for var in $vars_in_compose; do
-        [[ -n "${envmap[$var]:-}" ]] || missing_vars+=("$var")
-    done
-
-    if (( ${#missing_vars[@]} )); then
-        log ERROR "Missing required environment variables:"
-        printf ' - %s\n' "${missing_vars[@]}"
-        return 1
-    fi
-
-    log INFO "All required environment variables are set."
-    return 0
-}
-
-################################################################################
-# validate_compose_and_env()
-#   Runs strict_env_check, then `docker compose config` via the wrapper to catch
-#   unresolved variables or syntax errors.
-################################################################################
-validate_compose_and_env() {
-    local compose_file="$N8N_DIR/docker-compose.yml"
-    local env_file="$N8N_DIR/.env"
-
-    log INFO "Validating Docker Compose configuration and .env file..."
-
-    if [[ ! -f "$compose_file" ]]; then
-        log ERROR "docker-compose.yml not found at $compose_file"
-        exit 1 
-    fi
-
-    if [[ ! -f "$env_file" ]]; then
-        log ERROR ".env file not found at $env_file"
-        exit 1 
-    fi
-
-    # Validate required env vars are defined
-    if ! strict_env_check "$compose_file" "$env_file"; then
-        exit 1 
-    fi
-
-    # Validate docker-compose config syntax
-    local config_output
-    config_output=$(compose config 2>&1)
-    if echo "$config_output" | grep -q 'variable is not set'; then
-        log ERROR "Docker Compose config found unset variables:"
-        echo "$config_output" | grep 'variable is not set'
-        exit 1 
-    elif echo "$config_output" | grep -q 'error'; then
-        log ERROR "Docker Compose config error:"
-        echo "$config_output"
-        exit 1 
-    fi
-
-    log INFO "docker-compose.yml and .env validated successfully."
-}
-
-################################################################################
-# compose()
-#   Wrapper for `docker compose` that always supplies --env-file "$ENV_FILE"
-#   and -f "$COMPOSE_FILE". Use this for all compose operations.
-################################################################################
-compose() {
-    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
-}
-
-################################################################################
-# docker_compose_up()
-#   Starts the stack in detached mode using the compose wrapper.
-################################################################################
-docker_compose_up() {
-    log INFO "Starting Docker Compose..."
-    cd "$N8N_DIR"
-    compose up -d
-}
-
-################################################################################
 # install_docker()
 #   Installs Docker Engine + Compose v2 using the official repo (with fallback
 #   to get.docker.com). Installs common dependencies, enables the service, and
@@ -685,117 +388,11 @@ install_docker() {
 }
 
 ################################################################################
-# dump_service_logs(service [, tail=200])
-#   Prints last N log lines for a compose service (by service name).
-################################################################################
-dump_service_logs() {
-    local svc="$1"; local tail="${2:-200}"
-    local cid
-    cid="$(compose ps -q "$svc" 2>/dev/null | head -n1 || true)"
-    if [[ -n "$cid" ]]; then
-        log INFO "===== Logs: ${svc} (last ${tail} lines) ====="
-        docker logs --tail "$tail" "$cid" || true
-    else
-        log WARN "Service '$svc' not found (no container id)."
-    fi
-}
-
-################################################################################
-# dump_unhealthy_container_logs([tail=200])
-#   For all containers in this compose project:
-#     - If not running or unhealthy → print container name & tail logs.
-################################################################################
-dump_unhealthy_container_logs() {
-    local tail="${1:-200}"
-    local containers name status health
-    containers="$(compose ps -q || true)"
-    [[ -n "$containers" ]] || { log WARN "No containers found to dump logs for."; return 0; }
-
-    for container_id in $containers; do
-        name="$(docker inspect --format='{{.Name}}' "$container_id" | sed 's#^/##')"
-        status="$(docker inspect --format='{{.State.Status}}' "$container_id")"
-        health="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
-
-        if [[ "$status" != "running" || ( "$health" != "none" && "$health" != "healthy" ) ]]; then
-            log INFO "Container needs attention: name=${name} status=${status} health=${health}"
-            log INFO "----- Begin logs (${name}) -----"
-            docker logs --tail "$tail" "$container_id" || true
-            log INFO "----- End logs (${name}) -----"
-        fi
-    done
-}
-
-################################################################################
-# wait_for_containers_healthy([timeout=180], [interval=10])
-#   Polls `compose ps` containers until all are running and healthy (or timeout).
-#   Logs status each interval; returns non-zero on timeout.
-################################################################################
-wait_for_containers_healthy() {
-	local timeout="${1:-180}"
-	local interval="${2:-10}"
- 	local containers all_ok name status health
-    local elapsed=0
-    local -a offenders=()
-
-    log INFO "Checking container status..."
-
-    while [ $elapsed -lt $timeout ]; do
-        log INFO "Status check at $(date +%T)..."
-        all_ok=true
-        compose ps
-        offenders=()
-
-		containers="$(compose ps -q || true)"
-        for container_id in $containers; do
-            name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
-            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
-            health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
-
-            if [[ "$status" != "running" ]]; then
-                log WARN "$name is not running (status: $status)"
-                offenders+=("$name")
-                all_ok=false
-            elif [[ "$health" != "none" && "$health" != "healthy" ]]; then
-                log WARN "$name is running but not healthy (health: $health)"
-                offenders+=("$name")
-                all_ok=false
-            else
-                log INFO "$name is running and ${health:-no-health-check}"
-            fi
-        done
-
-        if $all_ok; then
-            log INFO "All containers are running and healthy."
-            return 0
-        fi
-
-        log INFO "Waiting ${interval}s for next check"
-        for ((i = 0; i < interval; i++)); do
-            echo -n "."
-            sleep 1
-        done
-        echo ""
-        elapsed=$((elapsed + interval))
-    done
-
-    log ERROR "Timeout after $timeout seconds. Some containers are not healthy."
-    if ((${#offenders[@]})); then
-        local uniq
-        uniq="$(printf '%s\n' "${offenders[@]}" | sort -u | xargs)"
-        log INFO "Containers needing attention after timeout: ${uniq}"
-        log INFO "Tip: stream a container's logs with:  docker logs -f <container_name>"
-    fi
-
-    # Collect logs from all non-running/unhealthy containers
-    dump_unhealthy_container_logs 200
-    return 1
-}
-
-################################################################################
 # print_summary_message()
 #   Prints a human-friendly summary: domain, version, timestamp, dirs, log file.
 ################################################################################
 print_summary_message() {
+    load_env_file
     echo "═════════════════════════════════════════════════════════════"
     if [[ "$INSTALL" == true ]]; then
         echo "N8N has been successfully installed!"
@@ -813,99 +410,6 @@ print_summary_message() {
 }
 
 ################################################################################
-# verify_traefik_certificate()
-#   Optional post-deploy check:
-#     - Ensures HTTPS responds (200/301/302)
-#     - Retrieves and logs LE certificate issuer/subject/dates via openssl.
-################################################################################
-verify_traefik_certificate() {
-    local domain_url="https://${DOMAIN}"
-    local MAX_RETRIES=6
-    local SLEEP_INTERVAL=10
-
-    log INFO "Checking DNS resolution for domain..."
-    domain_ip=$(dig +short "$DOMAIN")
-    if [[ -z "$domain_ip" ]]; then
-        log ERROR "DNS lookup failed for $DOMAIN. Ensure it points to your server's IP."
-        return 1
-    fi
-    log INFO "Domain $DOMAIN resolves to IP: $domain_ip"
-
-    log INFO "Checking if your domain is reachable via HTTPS..."
-    local success=false
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$domain_url")
-
-        if [[ "$response" == "200" || "$response" == "301" || "$response" == "302" ]]; then
-            log INFO "Domain is reachable with HTTPS (HTTP $response)"
-            success=true
-            break
-        elif [[ "$response" == "000" ]]; then
-            log WARN "No HTTPS response received (attempt $i/$MAX_RETRIES). Traefik or certs might not be ready."
-        else
-            log WARN "Domain not reachable (HTTP $response) (attempt $i/$MAX_RETRIES)."
-        fi
-
-        if [[ $i -lt $MAX_RETRIES ]]; then
-            log INFO "Retrying in ${SLEEP_INTERVAL}s..."
-            sleep $SLEEP_INTERVAL
-        fi
-    done
-
-    if [[ "$success" != true ]]; then
-        log ERROR "Domain is not reachable via HTTPS after $MAX_RETRIES attempts."
-        log INFO "Collecting Traefik logs for troubleshooting…"
-        dump_service_logs traefik 200
-        log INFO "Tip: follow live Traefik logs with:  docker logs -f traefik"
-        return 1
-    fi
-
-    log INFO "Validating SSL certificate from Let's Encrypt..."
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        cert_info=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -issuer -subject -dates)
-
-        if [[ -n "$cert_info" ]]; then
-            issuer=$(echo "$cert_info" | grep '^issuer=')
-            subject=$(echo "$cert_info" | grep '^subject=')
-            not_before=$(echo "$cert_info" | grep '^notBefore=')
-            not_after=$(echo "$cert_info" | grep '^notAfter=')
-
-            log INFO "Issuer: $issuer"
-            log INFO "Subject: $subject"
-            log INFO "Certificate Valid from: ${not_before#notBefore=}"
-            log INFO "Certificate Expires on: ${not_after#notAfter=}"
-            return 0
-        else
-            log WARN "Unable to retrieve certificate (attempt $i/$MAX_RETRIES)."
-            [[ $i -lt $MAX_RETRIES ]] && sleep $SLEEP_INTERVAL
-        fi
-    done
-
-    log ERROR "Could not retrieve certificate details after $MAX_RETRIES attempts."
-    log INFO "Collecting Traefik logs for troubleshooting…"
-    dump_service_logs traefik 200
-    log INFO "Tip: follow live Traefik logs with:  docker logs -f traefik"
-    return 1
-}
-
-################################################################################
-# check_services_up_running()
-#   Composite health gate: waits for healthy containers and (optionally) checks
-#   the TLS certificate.
-################################################################################
-check_services_up_running() {
-    if ! wait_for_containers_healthy; then
-        log ERROR "Some containers are not running or unhealthy. Please check the logs above."
-        exit 1
-    fi
-
-    # if ! verify_traefik_certificate; then
-    #     log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-    #     exit 1
-    # fi
-}
-
-################################################################################
 # install_n8n()
 #   Orchestrates a fresh install: prompt email (if missing), DNS check,
 #   Docker install, compose prep/validation, volumes, up, health, summary.
@@ -919,7 +423,7 @@ install_n8n() {
     validate_compose_and_env
     create_volumes
     docker_compose_up
-    check_services_up_running
+    check_services_up_running || { log ERROR "Stack unhealthy after install."; exit 1; }
     print_summary_message
 }
 
@@ -942,7 +446,7 @@ upgrade_n8n() {
     local current_version target_version
     current_version=$(get_current_n8n_version || echo "0.0.0")
     # Decide target version
-    local target_version="$N8N_VERSION"
+    target_version="$N8N_VERSION"
     if [[ -z "$target_version" || "$target_version" == "latest" ]]; then
         target_version=$(get_latest_n8n_version)
         [[ -z "$target_version" ]] && { log ERROR "Could not determine latest n8n tag."; exit 1; }
@@ -975,7 +479,7 @@ upgrade_n8n() {
 
     validate_compose_and_env
     docker_compose_up
-    check_services_up_running
+    check_services_up_running || { log ERROR "Stack unhealthy after upgrade."; exit 1; }
     print_summary_message
 }
 
@@ -1021,9 +525,7 @@ cleanup_n8n() {
     log INFO "Cleanup completed successfully!"
 }
 
-################################################################################
-# Main()
-################################################################################
+# Arg parsing
 # Define short/long specs
 SHORT="i:u:v:m:fcad:l:h"
 LONG="install:,upgrade:,version:,email:,force,cleanup,available,dir:,log-level:,help"
@@ -1069,7 +571,7 @@ while true; do
             shift 2
             ;;
         -l|--log-level)
-            LOG_LEVEL="$2"
+            LOG_LEVEL="${2^^}"
             shift 2
             ;;
         -h|--help)
@@ -1086,8 +588,6 @@ while true; do
 done
 
 # === Post-parse validations ===================================================
-LOG_LEVEL="${LOG_LEVEL^^}"
-# Ensure exactly one primary action was chosen
 _actions=0
 $INSTALL && _actions=$((_actions+1))
 $UPGRADE && _actions=$((_actions+1))
@@ -1112,20 +612,21 @@ if $INSTALL || $UPGRADE; then
     fi
 fi
 
-# Main execution
-check_root
+################################################################################
+# Main()
+################################################################################
+check_root || { log ERROR "Please run as root (needed to read Docker volumes)."; exit 1; }
 N8N_DIR="${TARGET_DIR:-$PWD}"
-
-mkdir -p "$N8N_DIR/logs"
-LOG_FILE="$N8N_DIR/logs/n8n_manager.log"
-log INFO "Logging to $LOG_FILE"
-exec > >(tee "$LOG_FILE") 2>&1
-
 ENV_FILE="$N8N_DIR/.env"
 COMPOSE_FILE="$N8N_DIR/docker-compose.yml"
 
-N8N_VERSION="${N8N_VERSION:-latest}"
+mkdir -p "$N8N_DIR/logs"
+LOG_FILE="$N8N_DIR/logs/n8n_manager.log"
+
+exec > >(tee "$LOG_FILE") 2>&1
+log INFO "Logging to $LOG_FILE"
 log INFO "Working on directory: $N8N_DIR"
+N8N_VERSION="${N8N_VERSION:-latest}"
 
 if [[ -n "${SUDO_USER:-}" ]]; then
   chown -R "$SUDO_USER":"$SUDO_USER" "$N8N_DIR"
@@ -1136,6 +637,7 @@ if [[ "$LOG_LEVEL" == "DEBUG" ]]; then
     set -x
 fi
 
+# Execute selected action
 if [[ $INSTALL == true ]]; then
     install_n8n
 elif [[ $UPGRADE == true ]]; then
