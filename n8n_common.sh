@@ -129,12 +129,13 @@ check_root() {
 #   Inserts or replaces KEY=VALUE in an .env file (idempotent).
 ################################################################################
 upsert_env_var() {
-    local key="$1" val="$2" file="$3"
+	local key="$1" val="$2" file="$3"
     if grep -qE "^${key}=" "$file"; then
         sed -i "s|^${key}=.*|${key}=${val}|" "$file"
     else
         printf "\n%s=%s\n" "$key" "$val" >> "$file"
     fi
+	log INFO "Added the $key=$val to $file"
 }
 
 ################################################################################
@@ -588,9 +589,9 @@ check_services_up_running() {
         return 1
     fi
 
-    # if ! verify_traefik_certificate "$DOMAIN"; then
-    #     log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-    #     return 1
-    # fi
+    if ! verify_traefik_certificate "$DOMAIN"; then
+        log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
+        return 1
+    fi
     return 0
 }
