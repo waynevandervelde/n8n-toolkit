@@ -227,6 +227,7 @@ list_available_versions() {
 ################################################################################
 validate_image_tag() {
     local tag="$1"
+    log INFO "Validate if n8n version '$tag' is available in Docker Hub."
     if docker manifest inspect "docker.n8n.io/n8nio/n8n:${tag}" >/dev/null 2>&1; then return 0; fi
     if docker manifest inspect "docker.io/n8nio/n8n:${tag}"  >/dev/null 2>&1; then return 0; fi
     return 1
