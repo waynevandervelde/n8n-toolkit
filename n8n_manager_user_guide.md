@@ -72,60 +72,60 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    ```
    CLI quick reference (most‑used flags)
   ```bash
-Usage: ./n8n_manager.sh [OPTIONS]
-
-Options:
-  -a, --available
-        List available n8n versions
-        * If n8n is running → show all newer versions than current
-        * If n8n is not running → show top 5 latest versions
-
-  -i, --install <DOMAIN>
-        Install n8n stack with specified domain
-        Use -v|--version to specify a version
-
-  -u, --upgrade <DOMAIN>
-        Upgrade n8n stack with specified domain
-        Use -f|--force to force upgrade/downgrade
-        Use -v|--version to specify a version
-
-  -v, --version <N8N_VERSION>
-        Install/upgrade with a specific n8n version. If omitted/empty, uses latest-stable
-
-  -m, --email <SSL_EMAIL>
-        Email address for Let's Encrypt SSL certificate
-
-  -c, --cleanup
-        Cleanup all containers, volumes, and network
-
-  -d, --dir <TARGET_DIR>
-        Target install directory (default: $PWD)
-
-  -l, --log-level <LEVEL>
-        Set log level: DEBUG, INFO (default), WARN, ERROR
-
-  -h, --help
-        Show script usage
-
-Examples:
-  ./n8n_manager.sh -a
-      # List available versions
-
-  ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -d /home/n8n
-      # Install the latest n8n version
-
-  ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3 -d /home/n8n
-      # Install a specific n8n version
-
-  ./n8n_manager.sh -u n8n.YourDomain.com -d /home/n8n
-      # Upgrade to the latest n8n version
-
-  ./n8n_manager.sh -u n8n.YourDomain.com -f -v 1.107.2 -d /home/n8n
-      # Upgrade to a specific n8n version
-
-  ./n8n_manager.sh -c
-      # Cleanup everything
-   ```
+   Usage: ./n8n_manager.sh [OPTIONS]
+   
+   Options:
+     -a, --available
+           List available n8n versions
+           * If n8n is running → show all newer versions than current
+           * If n8n is not running → show top 5 latest versions
+   
+     -i, --install <DOMAIN>
+           Install n8n stack with specified domain
+           Use -v|--version to specify a version
+   
+     -u, --upgrade <DOMAIN>
+           Upgrade n8n stack with specified domain
+           Use -f|--force to force upgrade/downgrade
+           Use -v|--version to specify a version
+   
+     -v, --version <N8N_VERSION>
+           Install/upgrade with a specific n8n version. If omitted/empty, uses latest-stable
+   
+     -m, --email <SSL_EMAIL>
+           Email address for Let's Encrypt SSL certificate
+   
+     -c, --cleanup
+           Cleanup all containers, volumes, and network
+   
+     -d, --dir <TARGET_DIR>
+           Target install directory (default: $PWD)
+   
+     -l, --log-level <LEVEL>
+           Set log level: DEBUG, INFO (default), WARN, ERROR
+   
+     -h, --help
+           Show script usage
+   
+   Examples:
+     ./n8n_manager.sh -a
+         # List available versions
+   
+     ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -d /home/n8n
+         # Install the latest n8n version
+   
+     ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3 -d /home/n8n
+         # Install a specific n8n version
+   
+     ./n8n_manager.sh -u n8n.YourDomain.com -d /home/n8n
+         # Upgrade to the latest n8n version
+   
+     ./n8n_manager.sh -u n8n.YourDomain.com -f -v 1.107.2 -d /home/n8n
+         # Upgrade to a specific n8n version
+   
+     ./n8n_manager.sh -c
+         # Cleanup everything
+      ```
 ---
 
 ## Install n8n
