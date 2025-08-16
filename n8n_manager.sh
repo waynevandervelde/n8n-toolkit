@@ -520,6 +520,18 @@ prepare_compose_file() {
 }
 
 ################################################################################
+# load_env_file
+################################################################################
+load_env_file() {
+    if [[ -f "$ENV_FILE" ]]; then
+        set -o allexport
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+        set +o allexport
+    fi
+}
+
+################################################################################
 # strict_env_check(compose_file, env_file)
 #   Scans the compose file for ${VARS} and verifies each exists in env_file.
 #   Prints missing keys and returns non-zero if any are absent.
@@ -723,7 +735,7 @@ wait_for_containers_healthy() {
 	local interval="${2:-10}"
  	local containers all_ok name status health
     local elapsed=0
-    local offenders=()
+    local -a offenders=()
 
     log INFO "Checking container status..."
 
@@ -731,8 +743,9 @@ wait_for_containers_healthy() {
         log INFO "Status check at $(date +%T)..."
         all_ok=true
         compose ps
-		containers=$(compose ps -q)
+        offenders=()
 
+		containers="$(compose ps -q || true)"
         for container_id in $containers; do
             name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
             status=$(docker inspect --format='{{.State.Status}}' "$container_id")
@@ -767,7 +780,9 @@ wait_for_containers_healthy() {
 
     log ERROR "Timeout after $timeout seconds. Some containers are not healthy."
     if ((${#offenders[@]})); then
-        log INFO "Containers needing attention after timeout: ${offenders[*]}"\
+        local uniq
+        uniq="$(printf '%s\n' "${offenders[@]}" | sort -u | xargs)"
+        log INFO "Containers needing attention after timeout: ${uniq}"
         log INFO "Tip: stream a container's logs with:  docker logs -f <container_name>"
     fi
 
@@ -917,6 +932,7 @@ install_n8n() {
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
     cd "$N8N_DIR"
+    load_env_file
 
     # Make sure jq is available for tag lookups
     if ! command -v jq >/dev/null 2>&1; then
