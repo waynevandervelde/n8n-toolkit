@@ -1,8 +1,9 @@
 #!/bin/bash
 
 set -euo pipefail
+umask 027
+set -o errtrace
 IFS=$'\n\t'
-
 #############################################################################################
 # N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
 # Author:      TheNguyen
@@ -21,6 +22,15 @@ IFS=$'\n\t'
 #     • Prints a console summary
 #     • Sends failure/success notifications over Gmail SMTP (msmtp)
 #############################################################################################
+# Load shared helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/n8n_common.sh"
+
+trap 'on_interrupt' INT TERM HUP
+trap 'log INFO "Exiting (code $?)"' EXIT
+# Use local handler so we can email on unexpected failures
+trap 'handle_error' ERR
 
 # === Default Configuration ===
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
@@ -31,12 +41,14 @@ DO_RESTORE=false
 DO_FORCE=false
 TARGET_RESTORE_FILE=""
 LOG_LEVEL="INFO"
-EMAIL_TO=""
 NOTIFY_ON_SUCCESS=false
 SMTP_USER="${SMTP_USER:-}"
 SMTP_PASS="${SMTP_PASS:-}"
 RCLONE_REMOTE=""
 RCLONE_TARGET=""
+EMAIL_TO=""
+EMAIL_EXPLICIT=false # set true only if -e/--email is passed
+EMAIL_SENT=false # becomes true only after a successful send
 
 # These will be set later
 N8N_DIR=""
@@ -52,34 +64,10 @@ BACKUP_FILE=""
 DRIVE_LINK=""
 
 ################################################################################
-# log(level, message...)
-#   Print a log line if level >= LOG_LEVEL.
+# can_send_email
 ################################################################################
-log() {
-    local level="$1"; shift
-    local levels=("DEBUG" "INFO" "WARN" "ERROR")
-    local show=1
-
-    case "$LOG_LEVEL" in
-        DEBUG) show=0 ;;
-        INFO) [[ "$level" != "DEBUG" ]] && show=0 ;;
-        WARN) [[ "$level" == "WARN" || "$level" == "ERROR" ]] && show=0 ;;
-        ERROR) [[ "$level" == "ERROR" ]] && show=0 ;;
-    esac
-
-    if [[ $show -eq 0 ]]; then
-        echo "[$level] $*"
-    fi
-}
-
-################################################################################
-# load_env()
-#   Source .env for DOMAIN and other variables, exiting if missing.
-################################################################################
-load_env() {
-    [[ -f "$N8N_DIR/.env" ]] || { log ERROR ".env not found in $N8N_DIR"; exit 1; }
-    set -o allexport; source "$N8N_DIR/.env"; set +o allexport
-    [[ -n "${DOMAIN:-}" ]] || { log ERROR "DOMAIN not set in .env"; exit 1; }
+can_send_email() {
+    [[ -n "$EMAIL_TO" && -n "$SMTP_USER" && -n "$SMTP_PASS" ]]
 }
 
 ################################################################################
@@ -87,20 +75,24 @@ load_env() {
 #   Send an email via Gmail SMTP using msmtp.
 ################################################################################
 send_email() {
-  local subject="$1"
-  local body="$2"
-  local attachment="${3:-}"
+    local subject="$1"
+    local body="$2"
+    local attachment="${3:-}"
 
-  # Bail if any required creds/recipients are missing
-  if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
-    log WARN "SMTP_USER, SMTP_PASS, or EMAIL_TO not set; cannot send email."
-    return 1
-  fi
+    if ! $EMAIL_EXPLICIT; then
+        # user never asked → silently skip
+        return 0
+    fi
 
-  log INFO "Sending email to: $EMAIL_TO"
-  # Generate a random boundary
-  local boundary="=====n8n_backup_$(date +%s)_$$====="
-  {
+    if ! can_send_email; then
+        log ERROR "Email requested (-e) but SMTP_USER/SMTP_PASS not set → cannot send email."
+        return 1
+    fi
+
+    log INFO "Sending email to: $EMAIL_TO"
+    # Generate a random boundary
+    local boundary="=====n8n_backup_$(date +%s)_$$====="
+    {
     # Standard headers
     echo "From: $SMTP_USER"
     echo "To: $EMAIL_TO"
@@ -117,34 +109,35 @@ send_email() {
 
     # If we have an attachment, embed it properly
     if [[ -n "$attachment" && -f "$attachment" ]]; then
-      local filename
-      filename=$(basename "$attachment")
-      echo "--$boundary"
-      echo "Content-Type: application/octet-stream; name=\"$filename\""
-      echo "Content-Transfer-Encoding: base64"
-      echo "Content-Disposition: attachment; filename=\"$filename\""
-      echo
-      base64 "$attachment"
-      echo
+        local filename
+        filename=$(basename "$attachment")
+        echo "--$boundary"
+        echo "Content-Type: application/octet-stream; name=\"$filename\""
+        echo "Content-Transfer-Encoding: base64"
+        echo "Content-Disposition: attachment; filename=\"$filename\""
+        echo
+        base64 "$attachment"
+        echo
     fi
 
     # End of multipart
     echo "--$boundary--"
-  } | msmtp \
-      --host=smtp.gmail.com \
-      --port=587 \
-      --auth=on \
-      --tls=on \
-      --from="$SMTP_USER" \
-      --user="$SMTP_USER" \
-      --passwordeval="echo $SMTP_PASS" \
-      "$EMAIL_TO"
+    } | msmtp \
+        --host=smtp.gmail.com \
+        --port=587 \
+        --auth=on \
+        --tls=on \
+        --from="$SMTP_USER" \
+        --user="$SMTP_USER" \
+        --passwordeval="echo $SMTP_PASS" \
+        "$EMAIL_TO"
 
-  if [[ $? -eq 0 ]]; then
-    log INFO "Email sent with subject: $subject"
-  else
-    log WARN "Failed to send email with subject: $subject"
-  fi
+    if [[ $? -eq 0 ]]; then
+        log INFO "Email sent with subject: $subject"
+        EMAIL_SENT=true
+    else
+        log WARN "Failed to send email with subject: $subject"
+    fi
 }
 
 ################################################################################
@@ -152,14 +145,22 @@ send_email() {
 #   Trap for any uncaught error: logs, sends failure email, and exits.
 ################################################################################
 handle_error() {
-    write_summary "Error" "FAIL"
-    log ERROR "Unhandled error. See $LOG_FILE"
-    send_email "$DATE: n8n Backup FAILED locally" \
-               "An error occurred. See attached log." \
-               "$LOG_FILE"
-    exit 1
+  # Try to append to the summary only if we have enough context
+  if [[ -n "${BACKUP_DIR:-}" && -n "${DATE:-}" ]]; then
+    write_summary "Error" "FAIL" || true
+  fi
+
+  log ERROR "Unhandled error. See ${LOG_FILE:-"(no log created yet)"}"
+
+  # Attach the log only if it exists
+  local attach=""
+  [[ -n "${LOG_FILE:-}" && -f "$LOG_FILE" ]] && attach="$LOG_FILE"
+
+  send_email "${DATE:-$(date +%F_%H-%M-%S)}: n8n Backup FAILED locally" \
+             "An error occurred. See attached log." \
+             "$attach" || true
+  exit 1
 }
-trap 'handle_error' ERR
 
 ################################################################################
 # usage()
@@ -270,19 +271,6 @@ is_system_changed() {
 }
 
 ################################################################################
-# get_current_n8n_version()
-#   Returns the version of n8n running in the Docker container.
-################################################################################
-get_current_n8n_version() {
-	local cid
-	cid=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q n8n 2>/dev/null || true)
-	if [[ -n "$cid" ]]; then
-		docker exec "$cid" n8n --version 2>/dev/null && return 0
-	fi
-	docker exec n8n n8n --version 2>/dev/null || echo "unknown"
-}
-
-################################################################################
 # get_google_drive_link()
 #   If RCLONE_REMOTE and RCLONE_TARGET are set, reads root_folder_id
 #   from rclone.conf and echoes the Drive folder URL.
@@ -348,9 +336,6 @@ EOF
 #   $BACKUP_FILE and returns 0; on any error returns 1.
 ################################################################################
 do_local_backup() {
-    # Temporarily disable errexit so we can catch errors
-    set +e
-
     local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
     mkdir -p "$BACKUP_PATH" || { log ERROR "Failed to create $BACKUP_PATH"; return 1; }
 
@@ -406,7 +391,6 @@ do_local_backup() {
     find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
 	find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -exec rmdir {} \;
 	log INFO "Removed any empty backup_<timestamp> folders"
-    set -e
     return 0
 }
 
@@ -439,10 +423,12 @@ upload_backup_rclone() {
         ret=1
     fi
 
-    log INFO "Pruning remote archives older than $DAYS_TO_KEEP days"
-    rclone delete --min-age "${DAYS_TO_KEEP}d" "$RCLONE_REMOTE:$RCLONE_TARGET" || \
-        log WARN "Failed to prune remote archives"
-
+    # Safer remote prune: only delete our *.tar.gz files older than retention
+    log INFO "Pruning remote archives older than $DAYS_TO_KEEP days (limited to our backup patterns)"
+    rclone delete --min-age "${DAYS_TO_KEEP}d" \
+        --include "n8n_backup_*.tar.gz" \
+        --exclude "backup_summary.md" \
+        "$RCLONE_REMOTE:$RCLONE_TARGET" || log WARN "Remote prune returned non-zero (continuing)"
     return $ret
 }
 
@@ -525,40 +511,50 @@ See log at $LOG_FILE"
 ################################################################################
 print_backup_summary() {
 	local summary_file="$BACKUP_DIR/backup_summary.md"
-    local email_note
+    local email_status email_reason
+    local W=24  # label column width
 	log INFO "Print a summary of what happened..."
 
     # Determine whether an email was sent
-    if [[ "$BACKUP_STATUS" == "FAIL" ]] || [[ "$UPLOAD_STATUS" == "FAIL" ]] || [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
-        email_note="Yes"
+    if ! $EMAIL_EXPLICIT; then
+        email_status="SKIPPED"
+        email_reason="(not requested)"
+    elif $EMAIL_SENT; then
+        email_status="PASS"
+        email_reason=""
     else
-        email_note="No"
+        if [[ -z "$SMTP_USER" || -z "$SMTP_PASS" || -z "$EMAIL_TO" ]]; then
+            email_status="ERROR"
+            email_reason="(missing SMTP config)"
+        else
+            email_status="FAIL"
+            email_reason="(send failed)"
+        fi
     fi
 
     echo "═════════════════════════════════════════════════════════════"
-    printf "Action:               %s\n"   "$ACTION"
-	printf "Status:               %s\n"   "$BACKUP_STATUS"
-    printf "Timestamp:            %s\n"   "$DATE"
-    printf "Domain:               https://%s\n" "$DOMAIN"
-    [[ -n "$BACKUP_FILE" ]] && printf "Backup file:          %s/%s\n" "$BACKUP_DIR" "$BACKUP_FILE"
-    printf "N8N Version:          %s\n"   "$N8N_VERSION"
-    printf "Log File:             %s\n"   "$LOG_FILE"
-    printf "Daily tracking:       %s\n"   "$summary_file"
+    printf "%-${W}s%s\n" "Action:"                 "$ACTION"
+    printf "%-${W}s%s\n" "Status:"                 "$BACKUP_STATUS"
+    printf "%-${W}s%s\n" "Timestamp:"              "$DATE"
+    printf "%-${W}shttps://%s\n" "Domain:"          "$DOMAIN"
+    [[ -n "$BACKUP_FILE" ]] && printf "%-${W}s%s/%s\n" "Backup file:" "$BACKUP_DIR" "$BACKUP_FILE"
+    printf "%-${W}s%s\n" "N8N Version:"            "$N8N_VERSION"
+    printf "%-${W}s%s\n" "Log File:"               "$LOG_FILE"
+    printf "%-${W}s%s\n" "Daily tracking:"         "$summary_file"
 
     case "$UPLOAD_STATUS" in
         "SUCCESS")
-            printf "Uploaded to Google drive:   SUCCESS\n"
-            printf "Folder link:          %s\n" "$DRIVE_LINK"
+            printf "%-${W}s%s\n" "Google Drive upload:" "SUCCESS"
+            printf "%-${W}s%s\n" "Folder link:"         "$DRIVE_LINK"
             ;;
         "SKIPPED")
-            printf "Uploaded to Google drive:   SKIPPED\n"
+            printf "%-${W}s%s\n" "Google Drive upload:" "SKIPPED"
             ;;
         *)
-            printf "Uploaded to Google drive:   FAILED\n"
+            printf "%-${W}s%s\n" "Google Drive upload:" "FAILED"
             ;;
     esac
-
-    printf "Email notify sent:    %s\n" "$email_note"
+    printf "%-${W}s%s\n" "Email notification:" "$( [[ -n "$email_reason" ]] && echo "$email_status $email_reason" || echo "$email_status" )"
     echo "═════════════════════════════════════════════════════════════"
 }
 
@@ -577,7 +573,7 @@ print_backup_summary() {
 # env file and docker-compose.yml
 ################################################################################
 backup_n8n() {
-    N8N_VERSION=$(get_current_n8n_version)
+    N8N_VERSION="$(get_current_n8n_version)"
 	BACKUP_STATUS=""
 	UPLOAD_STATUS=""
 	BACKUP_FILE=""
@@ -622,7 +618,7 @@ backup_n8n() {
     upload_backup_rclone
 
 	# cache the Google Drive link exactly once
-	DRIVE_LINK=$(get_google_drive_link)
+	DRIVE_LINK="$(get_google_drive_link)"
 
     # Final email notification
     send_mail_on_action
@@ -632,200 +628,12 @@ backup_n8n() {
 }
 
 ################################################################################
-# wait_for_containers_healthy()
-#   Polls defined containers until they’re all running & healthy (or times out).
-################################################################################
-wait_for_containers_healthy() {
-	local timeout="${1:-180}"
-	local interval="${2:-10}"
- 	local containers all_ok name status health
-    local elapsed=0
-
-    log INFO "Checking container status..."
-
-    while [ $elapsed -lt $timeout ]; do
-        log INFO "Status check at $(date +%T)..."
-        all_ok=true
-        docker compose -f "$N8N_DIR/docker-compose.yml" ps
-		containers=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q)
-
-        for container_id in $containers; do
-            name=$(docker inspect --format='{{.Name}}' "$container_id" | sed 's/^\/\(.*\)/\1/')
-            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
-            health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
-
-            if [[ "$status" != "running" ]]; then
-                log WARN "$name is not running (status: $status)"
-                all_ok=false
-            elif [[ "$health" != "none" && "$health" != "healthy" ]]; then
-                log WARN "$name is running but not healthy (health: $health)"
-                all_ok=false
-            else
-                log INFO "$name is running and ${health:-no-health-check}"
-            fi
-        done
-
-        if $all_ok; then
-            log INFO "All containers are running and healthy."
-            return 0
-        fi
-
-        log INFO "Waiting ${interval}s for next check"
-        for ((i = 0; i < interval; i++)); do
-            echo -n "."
-            sleep 1
-        done
-        echo ""
-        elapsed=$((elapsed + interval))
-    done
-
-    log ERROR "Timeout after $timeout seconds. Some containers are not healthy."
-    return 1
-}
-
-################################################################################
-# check_container_healthy()
-#   Polls defined container until it's running & healthy (or times out).
-################################################################################
-check_container_healthy() {
-    local container_name="$1"
-    local timeout="${2:-60}"
-    local interval="${3:-5}"
-    local elapsed=0
-
-    log INFO "Checking health for container: $container_name"
-
-    while [ $elapsed -lt $timeout ]; do
-        local container_id
-		docker compose -f "$N8N_DIR/docker-compose.yml" ps
-		container_id=$(docker compose -f "$N8N_DIR/docker-compose.yml" ps -q "$container_name" 2>/dev/null || true)
-		if [[ -z "$container_id" ]]; then
-            container_id=$(docker ps -q -f "name=${container_name}" || true)
-        fi
-
-        if [[ -z "$container_id" ]]; then
-            log WARN "Container '$container_name' not found or not running."
-        else
-            local status health
-            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
-            health=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")
-
-            if [[ "$status" == "running" && ( "$health" == "none" || "$health" == "healthy" ) ]]; then
-                log INFO "$container_name is running and ${health:-no-health-check}"
-                return 0
-            else
-                log WARN "$container_name is running but not healthy (status: $status, health: $health)"
-            fi
-        fi
-
-        log INFO "Waiting ${interval}s for next check"
-        for ((i = 0; i < interval; i++)); do
-            echo -n "."
-            sleep 1
-        done
-        echo ""
-        elapsed=$((elapsed + interval))
-    done
-
-    log ERROR "Timeout after ${timeout}s. Container '$container_name' is not healthy."
-    return 1
-}
-
-################################################################################
-# verify_traefik_certificate()
-#   Verifies DNS, HTTPS, and SSL certificate health for the domain using curl and openssl
-################################################################################
-verify_traefik_certificate() {
-    local domain_url="https://${DOMAIN}"
-    local MAX_RETRIES=3
-    local SLEEP_INTERVAL=10
-	local domain_ip
- 	local cert_info issuer subject not_before not_after
-  	local response success=false
-
-    log INFO "Checking DNS resolution for domain..."
-    domain_ip=$(dig +short "$DOMAIN")
-    if [[ -z "$domain_ip" ]]; then
-        log ERROR "DNS lookup failed for $DOMAIN. Ensure it points to your server's IP."
-        return 1
-    fi
-    log INFO "Domain $DOMAIN resolves to IP: $domain_ip"
-
-    log INFO "Checking if your domain is reachable via HTTPS..."
-    local success=false
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$domain_url")
-
-        if [[ "$response" == "200" || "$response" == "301" || "$response" == "302" ]]; then
-            log INFO "Domain is reachable with HTTPS (HTTP $response)"
-            success=true
-            break
-        elif [[ "$response" == "000" ]]; then
-            log WARN "No HTTPS response received (attempt $i/$MAX_RETRIES). Traefik or certs might not be ready."
-        else
-            log WARN "Domain not reachable (HTTP $response) (attempt $i/$MAX_RETRIES)."
-        fi
-
-        if [[ $i -lt $MAX_RETRIES ]]; then
-            log INFO "Retrying in ${SLEEP_INTERVAL}s..."
-            sleep $SLEEP_INTERVAL
-        fi
-    done
-
-    if [[ "$success" != true ]]; then
-        log ERROR "Domain is not reachable via HTTPS after $MAX_RETRIES attempts."
-        return 1
-    fi
-
-    log INFO "Validating SSL certificate from Let's Encrypt..."
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        cert_info=$(echo | openssl s_client -connect "$DOMAIN:443" -servername "$DOMAIN" 2>/dev/null | openssl x509 -noout -issuer -subject -dates)
-
-        if [[ -n "$cert_info" ]]; then
-            issuer=$(echo "$cert_info" | grep '^issuer=')
-            subject=$(echo "$cert_info" | grep '^subject=')
-            not_before=$(echo "$cert_info" | grep '^notBefore=')
-            not_after=$(echo "$cert_info" | grep '^notAfter=')
-
-            log INFO "Issuer: $issuer"
-            log INFO "Subject: $subject"
-            log INFO "Certificate Valid from: ${not_before#notBefore=}"
-            log INFO "Certificate Expires on: ${not_after#notAfter=}"
-            return 0
-        else
-            log WARN "Unable to retrieve certificate (attempt $i/$MAX_RETRIES)."
-            [[ $i -lt $MAX_RETRIES ]] && sleep $SLEEP_INTERVAL
-        fi
-    done
-
-    log ERROR "Could not retrieve certificate details after $MAX_RETRIES attempts."
-    return 1
-}
-
-################################################################################
-# check_services_up_running()
-#   Combines container health and certificate checks to confirm stack is operational
-################################################################################
-check_services_up_running() {
-    if ! wait_for_containers_healthy; then
-        log ERROR "Some containers are not running or unhealthy. Please check the logs above."
-        return 1
-    fi
-
-    if ! verify_traefik_certificate; then
-        log ERROR "Traefik failed to issue a valid TLS certificate. Please check DNS, Traefik logs, and try again."
-        return 1
-    fi
-    return 0
-}
-
-################################################################################
 # restore_n8n()
 #   Restores Docker volumes, config, and DB from a backup archive.
 #   Returns 0 on success, non-zero on failure.
 ################################################################################
 restore_n8n() {
-    load_env
+    load_env_file
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
         log ERROR "Restore file not found: $TARGET_RESTORE_FILE"
         return 1
@@ -851,7 +659,7 @@ restore_n8n() {
 
 	# Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
-	docker compose -f "$N8N_DIR/docker-compose.yml" down --volumes --remove-orphans \
+	compose down --volumes --remove-orphans \
       || { log ERROR "docker-compose down failed"; return 1; }
 
    	# Check if we have a SQL database	
@@ -900,7 +708,7 @@ restore_n8n() {
     cd "$N8N_DIR" || { log ERROR "Failed to change directory to $N8N_DIR"; return 1; }
 
 	log INFO "Starting PostgreSQL first..."
-	docker compose -f "$N8N_DIR/docker-compose.yml" up -d postgres \
+	compose up -d postgres \
  		|| { log ERROR "Failed to start postgres"; return 1; }
 	log INFO "Waiting for postgres to be healthy..."
  	check_container_healthy "postgres" || return 1
@@ -931,7 +739,7 @@ restore_n8n() {
  
 	# When the PostgreSQL DB is ready, start other containers
 	log INFO "Starting the rest of the stack..."
-	docker compose -f "$N8N_DIR/docker-compose.yml" up -d || { log ERROR "docker compose up failed"; return 1; }
+	compose up -d || { log ERROR "docker compose up failed"; return 1; }
 
     log INFO "Checking services running and healthy after restoring backup..."
     if ! check_services_up_running; then
@@ -946,7 +754,7 @@ restore_n8n() {
     log INFO "Cleaning up..."
     rm -rf "$restore_dir"
 
-    N8N_VERSION=$(get_current_n8n_version)
+    N8N_VERSION="$(get_current_n8n_version)"
  	local restored_list=""
 	if ((${#VOLUMES[@]})); then
 		restored_list=$(printf '%s, ' "${VOLUMES[@]}")
@@ -959,7 +767,7 @@ restore_n8n() {
     echo "Domain:               https://${DOMAIN}"
     echo "Restore from file:    $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
-	echo "N8N Directory:        $N8N_DIR"
+	echo "N8N Directory:		$N8N_DIR"
     echo "Log File:             $LOG_FILE"
     echo "Timestamp:            $DATE"
 	echo "Volumes restored:     ${restored_list}"
@@ -970,33 +778,6 @@ restore_n8n() {
 	fi
     echo "═════════════════════════════════════════════════════════════"
 }
-
-################################################################################
-# require_cmd(cmd)
-#   Bail out early with an error if the given command is not installed.
-################################################################################
-require_cmd() {
-    command -v "$1" >/dev/null 2>&1 || { echo "[ERROR] Missing $1"; exit 1; }
-}
-
-# Ensure we have everything we need
-require_cmd docker
-require_cmd rsync
-require_cmd tar
-require_cmd curl
-require_cmd openssl
-require_cmd dig
-require_cmd base64
-
-# Only require msmtp if we might send mail
-if [[ -n "$EMAIL_TO" ]]; then
-  require_cmd msmtp
-fi
-
-# Only require rclone if a remote is configured
-if [[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]]; then
-  require_cmd rclone
-fi
 
 # === Argument Parsing (long & short) ===
 TEMP=$(getopt -o fbr:d:l:e:s:t:nh --long force,backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
@@ -1023,11 +804,12 @@ while true; do
             shift 2
             ;;
         -l|--log-level)
-            LOG_LEVEL="$2"
+            LOG_LEVEL="${2^^}"
             shift 2
             ;;
         -e|--email)
             EMAIL_TO="$2"
+            EMAIL_EXPLICIT=true
             shift 2
             ;;
         -s|--remote-name)
@@ -1058,24 +840,60 @@ done
 ################################################################################
 # Main Execution
 ################################################################################
+check_root || { log ERROR "Please run as root (needed to read Docker volumes)."; exit 1; }
 # Initialize directories & logging
 N8N_DIR="${N8N_DIR:-$PWD}"
+ENV_FILE="$N8N_DIR/.env"
+COMPOSE_FILE="$N8N_DIR/docker-compose.yml"
+
 BACKUP_DIR="$N8N_DIR/backups"
 LOG_DIR="$N8N_DIR/logs"
-log INFO "Working on directory: $N8N_DIR"
 mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$BACKUP_DIR/snapshot/volumes" "$BACKUP_DIR/snapshot/config"
 
-# Load DOMAIN from .env (needed by initialize_snapshot)
-load_env
-initialize_snapshot
-
 DATE=$(date +%F_%H-%M-%S)
-mode="restore"
-[[ "$DO_BACKUP" == "true" ]] && mode="backup"
+mode="restore"; [[ "$DO_BACKUP" == "true" ]] && mode="backup"
 LOG_FILE="$LOG_DIR/${mode}_n8n_$DATE.log"
-
 exec > >(tee "$LOG_FILE") 2>&1
+log INFO "Working on directory: $N8N_DIR"
 log INFO "Logging to $LOG_FILE"
+
+# Ensure we have everything we need
+require_cmd docker || exit 1
+require_cmd rsync  || exit 1
+require_cmd tar    || exit 1
+require_cmd curl   || exit 1
+require_cmd openssl|| exit 1
+require_cmd base64 || exit 1
+
+# Only require msmtp if we might send mail
+$EMAIL_EXPLICIT && require_cmd msmtp
+
+# Only require rclone if a remote is configured
+[[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]] && require_cmd rclone
+
+# Email config sanity checks
+if $EMAIL_EXPLICIT; then
+    missing=()
+    [[ -z "${SMTP_USER:-}" ]] && missing+=("SMTP_USER")
+    [[ -z "${SMTP_PASS:-}" ]] && missing+=("SMTP_PASS")
+    [[ -z "${EMAIL_TO:-}"  ]] && missing+=("EMAIL_TO/-e")
+
+    if ((${#missing[@]})); then
+        log WARN "Email notifications requested (-e), but missing: ${missing[*]}. Emails will NOT be sent."
+    else
+        if [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+            log INFO "Emails enabled → will notify on success and failure: $EMAIL_TO"
+        else
+            log INFO "Emails enabled → will notify on failure: $EMAIL_TO"
+        fi
+    fi
+elif [[ "$NOTIFY_ON_SUCCESS" == true ]]; then
+    log WARN "--notify-on-success was set, but no -e/--email provided. No email will be sent."
+fi
+
+# Load DOMAIN from .env (needed by initialize_snapshot)
+load_env_file
+initialize_snapshot
 
 if [[ "$DO_BACKUP" == "true" ]]; then
     backup_n8n || exit 1
