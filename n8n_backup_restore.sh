@@ -8,7 +8,7 @@ IFS=$'\n\t'
 # N8N Backup & Restore Script with Gmail SMTP Email Notifications via msmtp
 # Author:      TheNguyen
 # Email:       thenguyen.ai.automation@gmail.com
-# Version:     1.1.0
+# Version:     1.2.0
 # Date:        2025-08-10
 #
 # Description:
@@ -628,23 +628,66 @@ backup_n8n() {
 }
 
 ################################################################################
+# fetch_restore_archive_if_remote()
+# If TARGET_RESTORE_FILE is an rclone remote (contains ":" and not a local path),
+# copy it locally and set TARGET_RESTORE_FILE to the fetched local file.
+################################################################################
+fetch_restore_archive_if_remote() {
+    # Already a real local file? nothing to do.
+    if [[ -f "$TARGET_RESTORE_FILE" ]]; then
+        return 0
+    fi
+
+    # Heuristic: looks like "remote:path/..." (and not an absolute local path)
+    if [[ "$TARGET_RESTORE_FILE" == *:* && "$TARGET_RESTORE_FILE" != /* ]]; then
+        require_cmd rclone || { log ERROR "rclone required to fetch remote backup."; return 1; }
+
+        local tmp_dir="$BACKUP_DIR/_restore_tmp"
+        mkdir -p "$tmp_dir"
+
+        # Derive a local filename (keep the basename of the remote object)
+        local base
+        base="$(basename "$TARGET_RESTORE_FILE")"
+        local local_path="$tmp_dir/$base"
+
+        log INFO "Fetching backup from remote: $TARGET_RESTORE_FILE"
+        # Use 'copyto' so we can name the destination exactly
+        if rclone copyto "$TARGET_RESTORE_FILE" "$local_path"; then
+            log INFO "Downloaded to: $local_path"
+            TARGET_RESTORE_FILE="$local_path"
+            echo "$TARGET_RESTORE_FILE" > "$tmp_dir/.last_fetched"
+        else
+            log ERROR "Failed to fetch remote backup: $TARGET_RESTORE_FILE"
+            return 1
+        fi
+    fi
+}
+
+################################################################################
 # restore_n8n()
 #   Restores Docker volumes, config, and DB from a backup archive.
 #   Returns 0 on success, non-zero on failure.
 ################################################################################
 restore_n8n() {
     load_env_file
+    local requested_spec="$TARGET_RESTORE_FILE"
+
+    # If it's a remote like "gdrive-user:n8n-backups/xxx.tar.gz", fetch it locally
+    fetch_restore_archive_if_remote || { log ERROR "Failed to fetch remote restore archive."; return 1; }
+
+    # After fetch, TARGET_RESTORE_FILE should be a local path
     if [[ ! -f "$TARGET_RESTORE_FILE" ]]; then
-        log ERROR "Restore file not found: $TARGET_RESTORE_FILE"
+        log ERROR "Restore file not found: $TARGET_RESTORE_FILE (requested: $requested_spec)"
         return 1
     fi
+
     log INFO "Starting restore at $DATE..."
     local restore_dir="$N8N_DIR/n8n_restore_$(date +%s)"
 	mkdir -p "$restore_dir" || { log ERROR "Cannot create $restore_dir"; return 1; }
  
     log INFO "Extracting backup archive to $restore_dir"
 	tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir" \
-      || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
+        || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
 
     # Restore .env and docker-compose.yml if present
     if [[ -f "$restore_dir/.env.bak" ]]; then
@@ -753,6 +796,12 @@ restore_n8n() {
 
     log INFO "Cleaning up..."
     rm -rf "$restore_dir"
+    # Optional: clean up any fetched temp archive
+    if [[ -d "$BACKUP_DIR/_restore_tmp" ]]; then
+        # Only remove files we created; ignore user local archives
+        find "$BACKUP_DIR/_restore_tmp" -type f -name 'n8n_backup_*.tar.gz' -delete || true
+        rmdir "$BACKUP_DIR/_restore_tmp" 2>/dev/null || true
+    fi
 
     N8N_VERSION="$(get_current_n8n_version)"
  	local restored_list=""
@@ -765,7 +814,8 @@ restore_n8n() {
     echo "═════════════════════════════════════════════════════════════"
 	echo "Restore completed successfully."
     echo "Domain:               https://${DOMAIN}"
-    echo "Restore from file:    $TARGET_RESTORE_FILE"
+    echo "Restore from file:    $requested_spec"
+    echo "Local archive used:   $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
 	echo "N8N Directory:		$N8N_DIR"
     echo "Log File:             $LOG_FILE"
