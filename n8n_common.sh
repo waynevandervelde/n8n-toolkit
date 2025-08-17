@@ -135,7 +135,6 @@ upsert_env_var() {
     else
         printf "\n%s=%s\n" "$key" "$val" >> "$file"
     fi
-	log INFO "Added the $key=$val to $file"
 }
 
 ################################################################################
