@@ -319,14 +319,25 @@ prepare_compose_file() {
     # Rotate STRONG_PASSWORD if missing/default
     local password_line
     password_line=$(awk -F= '/^STRONG_PASSWORD=/{print $2; found=1} END{if(!found) print ""}' "$env_file")
-    if [[ "$password_line" == "myStrongPassword123!@#" || -z "$password_line" ]]; then
+    if [[ "$password_line" == "CHANGE_ME_BASE64_16_BYTES" || -z "$password_line" ]]; then
         local new_password
         new_password="$(openssl rand -base64 16)"
         log INFO "Setting STRONG_PASSWORD in .env"
         upsert_env_var "STRONG_PASSWORD" "${new_password}" "$env_file"
     else
-        log DEBUG "Existing STRONG_PASSWORD found. Not modifying it."
-        log DEBUG "STRONG_PASSWORD=$password_line"
+        log INFO "Existing STRONG_PASSWORD found. Not modifying it."
+    fi
+
+    # Rotate N8N_ENCRYPTION_KEY if missing/default
+    local enc_key_line
+    enc_key_line=$(awk -F= '/^N8N_ENCRYPTION_KEY=/{print $2; found=1} END{if(!found) print ""}' "$env_file")
+    if [[ -z "$enc_key_line" || "$enc_key_line" == "CHANGE_ME_BASE64_32_BYTES" ]]; then
+        local new_key
+        new_key="$(openssl rand -base64 32)"
+        log INFO "Setting N8N_ENCRYPTION_KEY in .env"
+        upsert_env_var "N8N_ENCRYPTION_KEY" "${new_key}" "$env_file"
+    else
+        log INFO "Existing N8N_ENCRYPTION_KEY found. Not modifying it."
     fi
 
     # Secure secrets file
