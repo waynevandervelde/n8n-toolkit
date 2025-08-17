@@ -138,6 +138,27 @@ upsert_env_var() {
 }
 
 ################################################################################
+# mask_secret
+#	Show first/last 4 chars only
+################################################################################
+mask_secret() {
+    # Show first/last 4 chars only
+    local s="$1"
+    local n=${#s}
+    (( n<=8 )) && { printf '%s\n' "$s"; return; }
+    printf '%s\n' "${s:0:4}***${s: -4}"
+}
+
+################################################################################
+# load_env_file
+#	quick heuristic for base64-ish strings (no strict padding check)
+################################################################################
+looks_like_b64() {
+    local s="$1"
+    [[ "$s" =~ ^[A-Za-z0-9+/=]+$ ]]
+}
+
+################################################################################
 # load_env_file
 ################################################################################
 load_env_file() {
@@ -148,6 +169,90 @@ load_env_file() {
   # shellcheck disable=SC1090
   source "$f"
   set +o allexport
+}
+
+################################################################################
+# read_env_var
+# Reads the value of a given key from a .env file.
+#
+# Features:
+# - Ignores blank lines and full-line comments (# ...).
+# - Handles keys with surrounding spaces.
+# - Supports values that are:
+#     * Double-quoted → strips quotes and unescapes \"
+#     * Single-quoted → strips quotes
+#     * Unquoted → trims spaces, removes inline comments
+# - Handles values containing '=' (only the first '=' is treated as the separator).
+# - Prints the clean value to stdout if found.
+#
+# Returns:
+#   0 if the key was found and printed
+#   1 if the file does not exist or the key was not found
+#
+# Usage:
+#   read_env_var /path/to/.env KEY
+# Example:
+#   DB_PASS=$(read_env_var ".env" "POSTGRES_PASSWORD")
+#
+# Notes:
+# - Only supports single-line values (not multi-line/heredoc).
+# - Safe for typical Docker Compose or n8n .env files.
+################################################################################
+read_env_var() { # usage: read_env_var /path/.env KEY
+    local file="$1" key="$2" line val
+    [[ -f "$file" ]] || return 1
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # strip Windows CR
+        line="${line%$'\r'}"
+        # skip blanks and full-line comments
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # match KEY=... (first '=' only)
+        if [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=(.*)$ ]]; then
+            val="${BASH_REMATCH[1]}"
+            # trim leading spaces
+            val="${val#"${val%%[![:space:]]*}"}"
+
+            if [[ "$val" =~ ^\"(.*)\"[[:space:]]*$ ]]; then
+                # double-quoted value, strip quotes and unescape \"
+                val="${BASH_REMATCH[1]}"
+                val="${val//\\\"/\"}"
+
+            elif [[ "$val" =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+                # single-quoted value, strip quotes
+                val="${BASH_REMATCH[1]}"
+
+            else
+                # unquoted → cut trailing inline comment and trim
+                val="${val%%#*}"
+                val="${val%"${val##*[![:space:]]}"}"
+            fi
+
+            printf '%s\n' "$val"
+            return 0
+        fi
+    done < "$file"
+
+    return 1
+}
+################################################################################
+# ensure_encryption_key_exists
+#   # Ensure current .env HAS N8N_ENCRYPTION_KEY and it "looks" OK. Abort if missing.
+################################################################################
+ensure_encryption_key_exists() {
+    local env_file="$1"
+    local key
+    key="$(read_env_var "$env_file" N8N_ENCRYPTION_KEY || true)"
+    if [[ -z "$key" ]]; then
+        log ERROR "N8N_ENCRYPTION_KEY is missing in $env_file. Aborting to avoid an unrecoverable restore."
+        return 1
+    fi
+    if ! looks_like_b64 "$key"; then
+        log WARN "N8N_ENCRYPTION_KEY in $env_file does not look like base64. Continue at your own risk."
+    fi
+    log INFO "N8N_ENCRYPTION_KEY present (masked): $(mask_secret "$key")"
 }
 
 ################################################################################
