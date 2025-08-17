@@ -44,7 +44,6 @@ TARGET_DIR=""
 N8N_VERSION="latest"
 DOMAIN=""
 VOLUMES=("n8n-data" "postgres-data" "letsencrypt")
-
 ################################################################################
 # usage()
 #   Displays script usage/help information when incorrect or no arguments are passed
@@ -500,47 +499,68 @@ upgrade_n8n() {
 
 ################################################################################
 # cleanup_n8n()
-#   Interactive destructive cleanup: `compose down --remove-orphans`, prune
-#   images, remove known volumes and the n8n network (if present).
+#   This will stop containers, remove the compose stack, and delete named resources
 ################################################################################
 cleanup_n8n() {
-    read -p "This will remove ALL n8n containers/volumes/images. Continue? [y/N] " ans
+    # Settings (can be overridden via env)
+    local NETWORK_NAME="${NETWORK_NAME:-n8n-network}"
+    local KEEP_CERTS="${KEEP_CERTS:-true}"
+    local REMOVE_IMAGES="${REMOVE_IMAGES:-false}"
+
+    log WARN "This will stop containers, remove the compose stack, and delete named resources."
+    echo "Planned actions:"
+    echo "  - docker compose down --remove-orphans -v"
+    echo "  - Remove external volumes: ${VLIST[*]}  (letsencrypt kept: ${KEEP_CERTS})"
+    echo "  - Remove docker network: ${NETWORK_NAME}"
+    echo "  - Remove dangling images (docker image prune -f)"
+    echo "  - Remove base images (n8nio/n8n, postgres) : ${REMOVE_IMAGES}"
+    echo
+
+    read -e -p "Continue? [y/N] " ans
     [[ "${ans,,}" == "y" ]] || { log INFO "Cleanup cancelled."; return 0; }
-    log INFO "Stopping containers and removing containers, volumes, and orphan services..."
+    
+    log INFO "Shutting down stack and removing orphans + anonymous volumes..."
     if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
-        compose down --remove-orphans
+        compose down --remove-orphans || true
     else
         log WARN "docker-compose.yml not found at \$N8N_DIR; attempting plain 'docker compose down' in $PWD."
-        docker compose down --remove-orphans
+        docker compose down --remove-orphans || true
     fi
-
-    log INFO "Pruning unused Docker images..."
-    docker image prune -f
 
     log INFO "Removing related volumes..."
     for vol in "${VOLUMES[@]}"; do
+        if [[ "$KEEP_CERTS" == "true" && "$vol" == "letsencrypt" ]]; then
+            log INFO "Skipping volume '$vol' (KEEP_CERTS=true)"
+            continue
+        fi
         if docker volume inspect "$vol" >/dev/null 2>&1; then
-            docker volume rm "$vol" && log INFO "Removed volume: $vol"
+            if docker volume rm "$vol" >/dev/null 2>&1; then
+                log INFO "Removed volume: $vol"
+            else
+                log WARN "Could not remove volume '$vol' (in use?)."
+            fi
         else
-            log INFO "Volume '$vol' not found, skipping..."
+            log INFO "Volume '$vol' not found; skipping."
         fi
     done
 
-    log INFO "Removing n8n network (if exists)..."
-    if docker network inspect n8n_network >/dev/null 2>&1; then
-        if docker network rm n8n_network 2>/dev/null; then
-            log INFO "Removed Docker network: n8n_network"
-        else
-            log WARN "Could not remove 'n8n_network' — it may still be in use."
-        fi
-    else
-        log INFO "Network 'n8n_network' not found, skipping..."
+    log INFO "Pruning dangling images…"
+    docker image prune -f >/dev/null 2>&1 || true
+    if [[ "$REMOVE_IMAGES" == "true" ]]; then
+        log WARN "Removing base images: n8nio/n8n and postgres (explicit request)"
+        docker images --format '{{.Repository}}:{{.Tag}} {{.ID}}' \
+          | grep -E '^(n8nio/n8n|docker\.n8n\.io/n8nio/n8n|postgres):' \
+          | awk '{print $2}' \
+          | xargs -r docker rmi -f || true
     fi
 
-    log INFO "Cleanup completed successfully!"
+    log INFO "Cleanup completed."
+    [[ "$KEEP_CERTS" == "true" ]] && log INFO "Note: kept 'letsencrypt' volume (certs preserved). Set KEEP_CERTS=false to reset TLS."
 }
 
+################################################################################
 # Arg parsing
+################################################################################
 # Define short/long specs
 SHORT="i:u:v:m:fcad:l:h"
 LONG="install:,upgrade:,version:,email:,force,cleanup,available,dir:,log-level:,help"
