@@ -78,7 +78,7 @@ Options:
         Cleanup all containers, volumes, and network
 
   -d, --dir <TARGET_DIR>
-        Target install directory (default: \$PWD)
+        /path/to/n8n: your n8n project directory (default: /home/n8n)
 
   -l, --log-level <LEVEL>
         Set log level: DEBUG, INFO (default), WARN, ERROR
@@ -90,16 +90,19 @@ Examples:
   $0 -a
       # List available versions
 
-  $0 -i n8n.YourDomain.com -m you@YourDomain.com -d /home/n8n
+  $0 -i n8n.YourDomain.com -m you@YourDomain.com
       # Install the latest n8n version
 
-  $0 -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3 -d /home/n8n
+  $0 -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3
       # Install a specific n8n version
 
-  $0 -u n8n.YourDomain.com -d /home/n8n
+  $0 -i n8n.YourDomain.com -m you@YourDomain.com -d /path/to/n8n
+      # Install the latest n8n version to a specific target directory
+
+  $0 -u n8n.YourDomain.com
       # Upgrade to the latest n8n version
 
-  $0 -u n8n.YourDomain.com -f -v 1.107.2 -d /home/n8n
+  $0 -u n8n.YourDomain.com -f -v 1.107.2
       # Upgrade to a specific n8n version
 
   $0 -c
@@ -617,7 +620,10 @@ fi
 # Main()
 ################################################################################
 check_root || { log ERROR "Please run as root (needed to read Docker volumes)."; exit 1; }
-N8N_DIR="${TARGET_DIR:-$PWD}"
+DEFAULT_N8N_DIR="/home/n8n"
+mkdir -p "$DEFAULT_N8N_DIR"
+N8N_DIR="${TARGET_DIR:-$DEFAULT_N8N_DIR}"
+
 ENV_FILE="$N8N_DIR/.env"
 COMPOSE_FILE="$N8N_DIR/docker-compose.yml"
 
