@@ -320,10 +320,12 @@ Example logs:
 ═════════════════════════════════════════════════════════════
 Restore completed successfully.
 Domain:               https://n8n-test.nguyenminhthe.com
-Restore from file:    /home/n8n/backups/n8n_backup_1.106.3_2025-08-15_14-41-46.tar.gz
-N8N Version:          1.106.3
-Log File:             /root/n8n-main/logs/restore_n8n_2025-08-15_14-48-53.log
-Timestamp:            2025-08-15_14-48-53
+Restore from file:    /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-55-00.tar.gz
+Local archive used:   /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-55-00.tar.gz
+N8N Version:          1.105.3
+N8N Directory:        /home/n8n/
+Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
+Timestamp:            2025-08-13_16-39-54
 Volumes Restored:     n8n-data, postgres-data, letsencrypt
 PostgreSQL:           Restored from SQL dump
 ═════════════════════════════════════════════════════════════
@@ -350,11 +352,13 @@ What it does:
 
 On restore success, you’ll see:
   ```bash
-[INFO] Restore completed successfully.
 ═════════════════════════════════════════════════════════════
+Restore completed successfully.
 Domain:               https://n8n-test.nguyenminhthe.com
-Restore from file:    /root/n8n-main/backups/n8n_backup_1.107.0_2025-08-13_16-25-01.tar.gz
+Restore from file:    gdrive-user:n8n-backups/n8n_backup_1.107.2_2025-08-16_09-01-00.tar.gz
+Local archive used:   /home/n8n/backups/n8n_backup_1.106.3_2025-08-16_15-55-00.tar.gz
 N8N Version:          1.105.3
+N8N Directory:        /home/n8n/
 Log File:             /root/n8n-main/logs/restore_n8n_2025-08-13_16-39-54.log
 Timestamp:            2025-08-13_16-39-54
 Volumes Restored:     n8n-data, postgres-data, letsencrypt
