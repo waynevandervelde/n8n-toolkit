@@ -35,7 +35,7 @@ Simple, reliable backups and restores for an **n8n (Docker)** stack—with optio
 - Backs up Docker **volumes**: `n8n-data`, `postgres-data`, `letsencrypt`
 - Creates a **PostgreSQL dump** (from the `postgres` container, DB `n8n`)
 - Saves copies of your `` and ``
-- **Skips** backup automatically if nothing changed (unless you force it)
+- **Skips** backup automatically if nothing has changed (unless you force it)
 - Keeps a rolling **30‑day summary** in `backups/backup_summary.md`
 - Optionally **uploads** backups to **Google Drive** via `rclone`
 - Sends **email alerts** through Gmail SMTP (**msmtp**) — with the log file attached on failures (and optionally on success)
@@ -82,7 +82,7 @@ export SMTP_PASS="your_app_password"   # Use a Gmail App Password (see below)
 
 - **Gmail App Password:**\
   In your Google Account → Security → 2‑Step Verification → **App passwords** → create one (choose “Mail”, device “Other”).\
-  Paste that 16‑char password into `SMTP_PASS`.
+  Paste that 16-character password into `SMTP_PASS`.
 
 - Where do emails go? Pass a recipient with `-e you@example.com`.
 
@@ -93,12 +93,12 @@ export SMTP_PASS="your_app_password"   # Use a Gmail App Password (see below)
 1. Configure `rclone` once:
 
 ```bash
-rclone config      # create a remote, e.g. name it: gdrive-user
+rclone config      # create a remote, e.g., name it: gdrive-user
 ```
 
 During `rclone config`, pick **Google Drive**, authorize, and finish.
 
-2. Choose your target folder name in Drive (e.g. `n8n-backups`).\
+2. Choose your target folder name in Drive (e.g., `n8n-backups`).\
    The script will upload into that folder under the remote you select.
 
 You’ll pass these when running:
@@ -119,7 +119,7 @@ You’ll pass these when running:
 | `-b`         | `--backup`               | Run a backup (only if changes detected).               |
 | `-f`         | `--force`                | Force the backup (ignore change detection).            |
 | `-r <FILE>`  | `--restore <FILE>`       | Restore from a backup archive (`.tar.gz`).             |
-| `-d <DIR>`   | `--dir <DIR>`            | Base directory of your n8n project (default: current). |
+| `-d <DIR>`   | `--dir <DIR>`            | Base directory of your n8n project (default: /home/n8n). |
 | `-l <LEVEL>` | `--log-level <LEVEL>` | `DEBUG` (verbose), `INFO` (default), `WARN` (non-fatal issues), `ERROR` (only fatal). |
 | `-e <EMAIL>` | `--email <EMAIL>`        | Email recipient for notifications.                     |
 | `-s <NAME>`  | `--remote-name <NAME>`   | `rclone` remote (e.g., `gdrive-user`).                 |
@@ -129,11 +129,11 @@ You’ll pass these when running:
 
 **Environment vars used:** `SMTP_USER`, `SMTP_PASS` (for Gmail auth).
 
-### 2) Normal backup (skip if nothing changed)
+### 2) Backup scenarios
 
 **Use case 01: Execute the backup at local, not upload, no email notification:**
 ```bash
-./n8n_backup_restore.sh -b -d /home/n8n
+./n8n_backup_restore.sh -b
 ```
 On success, you will see the following logs:
 ```bash
@@ -166,11 +166,11 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 	═════════════════════════════════════════════════════════════
 ```
 
-**Use case 02: Execute the backup at local, upload to Google drive, no email notification:**
+**Use case 02: Execute the backup at local, upload to Google Drive, no email notification:**
 
 - Execute the backup (skip if nothing changed), upload to Google Drive:
 ```bash
-./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups
+./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups
 ```
 
 - On backup success, you’ll see:
@@ -189,11 +189,11 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 	═════════════════════════════════════════════════════════════
 ```
 
-**Use case 03: Execute the backup at local, upload to Google drive, send email on failure:**
+**Use case 03: Execute the backup at local, upload to Google Drive, send email on failure:**
 
-- Execute the backup (force even no change), upload to Google Drive, and send the email on failure of backup/upload:
+- Execute the backup (force even if no change), upload to Google Drive, and send the email on failure of backup/upload:
 ```bash
-./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com
+./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups -e you@YourDomain.com
 ```
 - On backup success, you’ll see:
 ```bash
@@ -211,10 +211,10 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 	═════════════════════════════════════════════════════════════
 ```
 
-**Use case 04: Execute the backup at local, upload to Google drive, always send email:**
+**Use case 04: Execute the backup at local, upload to Google Drive, always send email:**
 
 ```bash
-./n8n_backup_restore.sh -b -d /home/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com --notify-on-success
+./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups -e you@YourDomain.com --notify-on-success
 ```
 
 - On backup success, you’ll see:
@@ -248,10 +248,13 @@ cat /root/n8n-main/backups/backup_summary.md
 | 2025-08-19_02-00-00 | Skipped | 1.107.0 | SKIPPED |
 | 2025-08-20_02-00-00 | Backup (forced) | 1.107.0 | SUCCESS |
 ```
-### 3) Force a backup (even with no changes)
+
+**Use case 05: Backup existing n8n installation in the specified directory**
+
+If your existing n8n was installed in the specified directory (not default as /home/n8n):
 
 ```bash
-./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
+./n8n_backup_restore.sh -b -d /path/to/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com
 ```
 
 ## What to expect after a backup
@@ -309,7 +312,7 @@ Email notification:   SKIPPED
 - Restore with the tar.gz file at local:
 
 ```bash
-./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz -d /home/n8n
+./n8n_backup_restore.sh -r backups/your_backup_file.tar.gz
 
 ```
 Example logs:
@@ -330,7 +333,6 @@ PostgreSQL:           Restored from SQL dump
 
 ```bash
 ./n8n_backup_restore.sh -r gdrive-user:n8n-backups/n8n_backup_1.107.2_2025-08-16_09-01-00.tar.gz
-
 ```
 ---
 
