@@ -26,8 +26,8 @@ Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgr
 The **n8n Manager** script automates the entire lifecycle of your n8n deployment:
 
 - **Install**: Set up Docker, Docker Compose, SSL certificates, and launch n8n behind Traefik.
-- **Upgrade**: Pull the latest n8n image, migrate settings, and restart services.
-- **Cleanup**: Remove all containers, volumes, networks, and images to start fresh.
+- **Upgrade**: Pull the latest image, update configs, and restart services safely.
+- **Cleanup**: Remove containers, volumes, networks, and images for a clean reset.
 
 ---
 
@@ -66,7 +66,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
    ```
    Note: After unzipping, GitHub appends "-main" to the folder name n8n. In this case, it’s n8n-main.
 
-2. **Run Help**
+2. **View CLI Help**
 ```bash
    sudo ./n8n_manager.sh -h
    ```
@@ -99,7 +99,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
            Cleanup all containers, volumes, and network
    
      -d, --dir <TARGET_DIR>
-           Target install directory (default: $PWD)
+           /path/to/n8n: your n8n project directory (default: /home/n8n)
    
      -l, --log-level <LEVEL>
            Set log level: DEBUG, INFO (default), WARN, ERROR
@@ -144,15 +144,21 @@ Top 5 latest stable n8n versions (no running version detected):
 1.107.2
 ```
 
-2. **Command to install n8n**
+2. **Installation scenarios**
 
-Interactive email prompt:
+**Install the latest n8n version:**
 ```bash
-# Install the latest n8n version
-sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -d /home/n8n
+sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com
+```
 
-# Install a specific n8n version
-sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3 -d /home/n8n
+**Install a specific n8n version:**
+```bash
+sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3
+```
+
+**Install the latest n8n version to a specific n8n directory:**
+``bash
+sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -d /path/to/n8n
 ```
 
 > ⚠️ Make sure your DNS is already propagated before running the installation. Otherwise, SSL will fail.
@@ -167,7 +173,7 @@ The script will:
    5. **Create volumes** and start the stack behind Traefik.
    6. **Wait for health checks** to pass.
 
-At the end, you’ll see a summary with your URL, version, and log file path.
+Ultimately, you’ll see a summary that includes your URL, version, and log file path.
 ```
 ─────────────────────────────────────────────────────────
 N8N has been successfully installed!
@@ -187,19 +193,25 @@ Execution log:      /home/n8n/logs/n8n_manager.log
 **Upgrade to the latest stable version:**
 
 ```bash
-sudo ./n8n_manager.sh -u n8n.YourDomain.com -d /home/n8n
+sudo ./n8n_manager.sh -u n8n.YourDomain.com
 ```
 
 **Upgrade to a specific greater version:**
 
 ```bash
-sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.106.3 -d /home/n8n
+sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.106.3
 ```
 
 **Upgrade to a specific lower version:** (requires `-f` to proceed)
 
 ```bash
-sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f -d /home/n8n
+sudo ./n8n_manager.sh -u n8n.YourDomain.com -v 1.105.3 -f
+```
+
+**Upgrade an existing n8n installation in a specified directory to the latest stable version:**
+
+```bash
+sudo ./n8n_manager.sh -u n8n.YourDomain.com -d /path/to/n8n
 ```
 
 - On success, you’ll see:
@@ -220,15 +232,16 @@ Execution log:      /home/n8n/logs/n8n_manager.log
 - If you **omit `-v`** (or pass `latest`), the script resolves the latest stable tag and updates `.env` to that version.
 - If you **pass `-v <version>`**, the script validates the tag, pins it in `.env`, and deploys that exact version.
 - A later `-u` **without `-v`** will switch you back to the latest stable.
+- Use `-d /path/to/n8n` to upgrade an existing n8n installation in the specified directory.
 
 ---
 
 ## Cleanup
 
-If you need to completely remove n8n and start over:
+If you need to remove n8n and start over completely:
 
 ```bash
-sudo ./n8n_manager.sh -c -d /home/n8n
+sudo ./n8n_manager.sh -c
 ```
 
 > ⚠️ This stops all containers, prunes images, and deletes volumes & networks. Use only if you want a full reset.
