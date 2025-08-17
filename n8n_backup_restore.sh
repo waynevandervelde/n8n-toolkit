@@ -900,7 +900,10 @@ done
 ################################################################################
 check_root || { log ERROR "Please run as root (needed to read Docker volumes)."; exit 1; }
 # Initialize directories & logging
-N8N_DIR="${N8N_DIR:-$PWD}"
+DEFAULT_N8N_DIR="/home/n8n"
+mkdir -p "$DEFAULT_N8N_DIR"
+N8N_DIR="${TARGET_DIR:-$DEFAULT_N8N_DIR}"
+
 ENV_FILE="$N8N_DIR/.env"
 COMPOSE_FILE="$N8N_DIR/docker-compose.yml"
 
