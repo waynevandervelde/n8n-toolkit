@@ -5,15 +5,39 @@ services:
     restart: unless-stopped
     command:
       - "--api.dashboard=false"
+      # EntryPoints
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.websecure.address=:443"
+      # Providers
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
-      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      # ACME RESOLVERS
+      # Production (HTTP-01 or TLS-ALPN-01 – pick one; HTTP-01 is less finicky)
       - "--certificatesresolvers.le.acme.email=${SSL_EMAIL}"
       - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+
+      # Staging (use while testing to avoid prod rate limits)
+      - "--certificatesresolvers.lestage.acme.email=${SSL_EMAIL}"
+      - "--certificatesresolvers.lestage.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.lestage.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.lestage.acme.httpchallenge.entrypoint=web"
+
+      # Optional: DNS-01 (wildcard / many subdomains). Example: Cloudflare.
+      # Set CLOUDFLARE_DNS_API_TOKEN in your .env before using.
+      # - "--certificatesresolvers.ledns.acme.email=${SSL_EMAIL}"
+      # - "--certificatesresolvers.ledns.acme.storage=/letsencrypt/acme.json"
+      # - "--certificatesresolvers.ledns.acme.dnschallenge=true"
+      # - "--certificatesresolvers.ledns.acme.dnschallenge.provider=cloudflare"
+      # Give DNS a moment to propagate before validation:
+      # - "--certificatesresolvers.ledns.acme.dnschallenge.delaybeforecheck=30s"
+
+      # (Optional) Logging while testing
+      - "--log.level=INFO"
+      - "--accesslog=true"
     ports:
       - "80:80"
       - "443:443"
@@ -57,19 +81,36 @@ services:
       retries: 3
     labels:
       - "traefik.enable=true"
+      # Router & TLS
       - "traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.n8n.tls=true"
       - "traefik.http.routers.n8n.entrypoints=web,websecure"
-      - "traefik.http.routers.n8n.tls.certresolver=le"
+      - "traefik.http.routers.n8n.tls=true"
+
+      # Default to staging while testing; switch ACME_RESOLVER=le in .env for prod
+      - "traefik.http.routers.n8n.tls.certresolver=${ACME_RESOLVER:-lestage}"
+
+      # Attach all middlewares (comma separated)
+      - "traefik.http.routers.n8n.middlewares=n8n-headers,n8n-rate,n8n-retry,n8n-compress"
+
+      # Security headers
       - "traefik.http.routers.n8n.middlewares=n8n"
       - "traefik.http.middlewares.n8n.headers.SSLRedirect=true"
       - "traefik.http.middlewares.n8n.headers.STSSeconds=315360000"
       - "traefik.http.middlewares.n8n.headers.browserXSSFilter=true"
       - "traefik.http.middlewares.n8n.headers.contentTypeNosniff=true"
       - "traefik.http.middlewares.n8n.headers.forceSTSHeader=true"
-      - "traefik.http.middlewares.n8n.headers.SSLHost=nguyenminhthe.com"
+      - "traefik.http.middlewares.n8n.headers.SSLHost=${DOMAIN}"
       - "traefik.http.middlewares.n8n.headers.STSIncludeSubdomains=true"
       - "traefik.http.middlewares.n8n.headers.STSPreload=true"
+
+      # Rate limiting (tune as needed)
+      - "traefik.http.middlewares.n8n-rate.ratelimit.average=100"
+      - "traefik.http.middlewares.n8n-rate.ratelimit.burst=50"
+      - "traefik.http.middlewares.n8n-rate.ratelimit.period=1s"
+
+      # Retry and compression
+      - "traefik.http.middlewares.n8n-retry.retry.attempts=3"
+      - "traefik.http.middlewares.n8n-compress.compress=true"
     networks:
       - n8n-network
 
