@@ -1,4 +1,4 @@
-# n8n Backup & Restore – User Guide (Non‑Technical)
+# n8n Backup & Restore – User Guide
 
 Simple, reliable backups and restores for an **n8n (Docker)** stack—with optional Google Drive uploads and email notifications.
 
