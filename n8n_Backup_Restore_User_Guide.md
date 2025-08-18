@@ -2,11 +2,6 @@
 
 Simple, reliable backups and restores for an **n8n (Docker)** stack—with optional Google Drive uploads and email notifications.
 
-**Script:** `n8n_backup_restore.sh`\
-**Version:** 1.1.0 \
-**Last Updated:** 2025-08-10 \
-**Author:** TheNguyen · [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com)
-
 ---
 
 ## Table of Contents
