@@ -104,7 +104,6 @@ During `rclone config`, pick **Google Drive**, authorize, and finish.
 You’ll pass these when running:
 
 - `-s gdrive-user` (remote name)
-- `-t n8n-backups` (folder path within that remote)
 
 > Tip: Verify the path with `rclone lsd gdrive-user:` and `rclone ls gdrive-user:n8n-backups`.
 
@@ -123,7 +122,6 @@ You’ll pass these when running:
 | `-l <LEVEL>` | `--log-level <LEVEL>` | `DEBUG` (verbose), `INFO` (default), `WARN` (non-fatal issues), `ERROR` (only fatal). |
 | `-e <EMAIL>` | `--email <EMAIL>`        | Email recipient for notifications.                     |
 | `-s <NAME>`  | `--remote-name <NAME>`   | `rclone` remote (e.g., `gdrive-user`).                 |
-| `-t <PATH>`  | `--remote-target <PATH>` | Destination path on the remote (e.g., `n8n-backups`).  |
 | `-n`         | `--notify-on-success`    | Also email on success (not just on failures).          |
 | `-h`         | `--help`                 | Show help.                                             |
 
@@ -170,7 +168,7 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 
 - Execute the backup (skip if nothing changed), upload to Google Drive:
 ```bash
-./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups
+./n8n_backup_restore.sh -b -s gdrive-user
 ```
 
 - On backup success, you’ll see:
@@ -193,7 +191,7 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 
 - Execute the backup (force even if no change), upload to Google Drive, and send the email on failure of backup/upload:
 ```bash
-./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups -e you@YourDomain.com
+./n8n_backup_restore.sh -b -s gdrive-user -e you@YourDomain.com
 ```
 - On backup success, you’ll see:
 ```bash
@@ -214,7 +212,7 @@ If no change is detected, the backup process will be skipped; use -f to force ba
 **Use case 04: Execute the backup at local, upload to Google Drive, always send email:**
 
 ```bash
-./n8n_backup_restore.sh -b -s gdrive-user -t n8n-backups -e you@YourDomain.com --notify-on-success
+./n8n_backup_restore.sh -b -s gdrive-user -e you@YourDomain.com --notify-on-success
 ```
 
 - On backup success, you’ll see:
@@ -254,7 +252,7 @@ cat /root/n8n-main/backups/backup_summary.md
 If your existing n8n was installed in the specified directory (not default as /home/n8n):
 
 ```bash
-./n8n_backup_restore.sh -b -d /path/to/n8n -s gdrive-user -t n8n-backups -e you@YourDomain.com
+./n8n_backup_restore.sh -b -d /path/to/n8n -s gdrive-user -e you@YourDomain.com
 ```
 
 ## What to expect after a backup
@@ -385,7 +383,7 @@ cd /root/n8n-main
 export SMTP_USER="you@YourDomain.com"
 export SMTP_PASS="your_app_password"   # Gmail App Password
 # Run backup (uploads to Drive + email on failures)
-./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups --notify-on-success >> /root/n8n-main/logs/cron.log 2>&1
+./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user --notify-on-success >> /root/n8n-main/logs/cron.log 2>&1
 EOF
 sudo chmod +x /root/n8n-main/run_backup.sh
 ```
@@ -428,7 +426,7 @@ Type=oneshot
 WorkingDirectory=/root/n8n
 Environment=SMTP_USER=you@YourDomain.com
 Environment=SMTP_PASS=your_app_password
-ExecStart=/root/n8n-main/n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups --notify-on-success
+ExecStart=/root/n8n-main/n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user --notify-on-success
 StandardOutput=append:/root/n8n-main/logs/systemd-backup.log
 StandardError=append:/root/n8n-main/logs/systemd-backup.log
 EOF
@@ -465,17 +463,6 @@ journalctl -u n8n-backup.service --no-pager -n 200
 tail -n 200 /root/n8n/logs/systemd-backup.log
 ```
 
-## Google Drive path tips
-
-- Use `-t n8n-backups` to upload into a folder named `` at the root of your Drive remote.
-- If you want a **subfolder**, use a path like `-t projects/n8n-backups`.
-- Verify the folder exists with:
-  ```bash
-  rclone lsd gdrive-user:
-  rclone lsd gdrive-user:projects
-  ```
-- The script **does not** create nested duplicate folders when you pass a simple leaf name (e.g. `n8n-backups`). If you previously saw `n8n-backups/n8n-backups`, double‑check your `-t` value.
-
 **Remote cleanup:** files older than **7 days** are deleted from the target folder:
 
 ```bash
@@ -500,13 +487,13 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 - Backup to Drive, email on failures only:
 
   ```bash
-  ./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -e you@YourDomain.com -s gdrive-user
   ```
 
 - Backup to Drive, **always** email (success or failure):
 
   ```bash
-  ./n8n_backup_restore.sh -b -n -e you@YourDomain.com -s gdrive-user -t n8n-backups
+  ./n8n_backup_restore.sh -b -n -e you@YourDomain.com -s gdrive-user
   ```
 
 - Force a backup even if unchanged:
