@@ -856,7 +856,7 @@ restore_n8n() {
     echo "Restore from file:    $requested_spec"
     echo "Local archive used:   $TARGET_RESTORE_FILE"
     echo "N8N Version:          $N8N_VERSION"
-	echo "N8N Directory:		$N8N_DIR"
+	echo "N8N Directory:        $N8N_DIR"
     echo "Log File:             $LOG_FILE"
     echo "Timestamp:            $DATE"
 	echo "Volumes restored:     ${restored_list}"
