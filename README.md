@@ -10,8 +10,8 @@ Whether you’re a developer or a non-technical user, this setup makes it simple
 - [Repository Layout](#repository-layout)  
 - [Prerequisites](#prerequisites)  
 - [Quick Start](#quick-start)  
-- [Install n8n (Manager Script)](#install-n8n-manager-script)  
-- [Backup and restore](#backups-and-restore)  
+- [Install n8n](#install-n8n-manager-script)  
+- [Backup and restore n8n](#backup-and-restore)  
 - [Support](#support)
 
 ---
@@ -97,7 +97,7 @@ Note: After unzipping, GitHub appends -main to the folder name. Instead of n8n/,
 
 ---
 
-### 2. Install n8n (Manager Script)
+### 2. Install n8n
 
 The `n8n_manager.sh` script is the main tool to **install, upgrade, and cleanup** your n8n stack.  
 It automates the entire lifecycle of the deployment so you don’t need to remember long Docker commands.
@@ -166,7 +166,7 @@ It automates the entire lifecycle of the deployment so you don’t need to remem
 
 ---
 
-### 3. Backup and restore
+### 3. Backup and restore n8n
 
 The `n8n_backup_restore.sh` script handles **backups and restores** of your n8n stack, including volumes, database, configs, and optional cloud storage.
 
