@@ -31,7 +31,24 @@ This guide walks you through configuring Rclone on an Ubuntu VPS to upload files
 
 ## 3. Perform the Headless OAuth Dance
 
-### A) On Your Windows PC
+### Step 1: On Your VPS
+1. Install Rclone if needed:
+   ```bash
+   curl https://rclone.org/install.sh | sudo bash
+   ```
+2. Run the authorize command, pasting your Client ID & Secret:
+   ```bash
+   rclone authorize "drive"
+   ```
+3. You will see these logs:
+```bash
+2025/08/17 09:50:26 NOTICE: If your browser doesn't open automatically, go to the following link: http://127.0.0.1:53682/auth?state=iXRcfXoSW_4yb_OM1qFzpw
+2025/08/17 09:50:26 NOTICE: Log in and authorize rclone for access
+2025/08/17 09:50:26 NOTICE: Waiting for code...
+```
+- Copy** that entire URL.
+
+### Step 2: On Your Windows PC
 
 1. Open **PowerShell** (Win+R → `powershell` → Enter).
 2. Run:
@@ -41,34 +58,23 @@ This guide walks you through configuring Rclone on an Ubuntu VPS to upload files
    - Replace `YOUR_VPS_IP` with your server’s IP address.
    - Leave this window open the entire time—it forwards port 53682 from the VPS.
 
-### B) On the VPS (New SSH Session)
+### Step 3: On Your Windows PC
 
-1. Install Rclone if needed:
-   ```bash
-   curl https://rclone.org/install.sh | sudo bash
-   ```
-2. Run the authorize command, pasting your Client ID & Secret:
-   ```bash
-   rclone authorize "drive"      --client-id YOUR_CLIENT_ID      --client-secret YOUR_CLIENT_SECRET
-   ```
-3. You’ll see a message:
-   ```text
-   NOTICE: Failed to open browser.
-   Please visit: http://127.0.0.1:53682/auth?state=...
-   ```
-4. **Copy** that entire URL.
-
-### C) On Your Windows Browser
-
-1. Paste the URL into your browser’s address bar.
+1. Paste the URL into your browser’s address bar
 2. Sign in, click **Allow** to grant access.
-3. The VPS shell will immediately print a single JSON object, for example:
-   ```json
+You will see the successful log:
+```bash
+Success!
+
+All done. Please go back to rclone.
+``
+
+### Step 4: Back to your VPS
+- The VPS shell will immediately print a single JSON object, for example:
+```json
    {"access_token":"ya29...","refresh_token":"1//0g...","expiry":"2025-..."}
    ```
-4. **Select and copy** that entire `{...}` block.
-
----
+- Select and copy** that entire `{...}` block.
 
 ## 4. Create the Rclone Config Manually on the VPS
 
