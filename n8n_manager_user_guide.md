@@ -151,7 +151,7 @@ sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -v 1.105.3
 ```
 
 **Install the latest n8n version to a specific n8n directory:**
-``bash
+```bash
 sudo ./n8n_manager.sh -i n8n.YourDomain.com -m you@YourDomain.com -d /path/to/n8n
 ```
 
