@@ -2,6 +2,7 @@
 set -euo pipefail
 set -o errtrace
 IFS=$'\n\t'
+
 #############################################################################################
 # N8N Installation & Management Script
 # Author: TheNguyen
@@ -112,7 +113,18 @@ EOF
 
 ################################################################################
 # check_domain()
-#   Verifies that provided $DOMAIN’s A record matches this server’s public IP.
+# Description:
+#   Verify the provided DOMAIN’s A record points to this server’s public IP.
+#
+# Behaviors:
+#   - Detects server IP via api.ipify.org.
+#   - Resolves DOMAIN with `dig` (preferred) or `getent`; logs resolved IPs.
+#   - If no resolver present → warns and continues (cannot verify).
+#   - If resolved IPs include server IP → logs success.
+#   - Else logs error and terminates installation/upgrade flow.
+#
+# Returns:
+#   0 on success/skip (no resolver); exits 1 on mismatch.
 ################################################################################
 check_domain() {
     local server_ip domain_ips resolver=""
@@ -148,8 +160,15 @@ check_domain() {
 
 ################################################################################
 # get_user_email()
-#   Prompts for a valid email (RFC-ish regex) for Let's Encrypt usage.
-#   Exports SSL_EMAIL on success.
+# Description:
+#   Prompt the operator for a valid email used for Let's Encrypt registration.
+#
+# Behaviors:
+#   - Re-prompts until input matches a simple RFC-ish email regex.
+#   - Exports SSL_EMAIL on success.
+#
+# Returns:
+#   0 after a valid email is captured (exported).
 ################################################################################
 get_user_email() {
     while true; do
@@ -165,9 +184,17 @@ get_user_email() {
 
 ################################################################################
 # list_available_versions()
-#   Context-aware version listing:
-#     - If n8n is detected, prints only versions newer than current.
-#     - Otherwise, prints the top 5 latest stable versions.
+# Description:
+#   Context-aware listing of n8n versions available on Docker Hub.
+#
+# Behaviors:
+#   - Detects current running version (if any).
+#   - If running: prints versions newer than the current one (ascending).
+#   - If not running: prints top 5 latest stable versions.
+#   - Uses fetch_all_stable_versions() as the source of truth.
+#
+# Returns:
+#   0 on success; 1 if versions could not be fetched.
 ################################################################################
 list_available_versions() {
     # Make sure jq exists even if user calls -a before install
@@ -224,8 +251,16 @@ list_available_versions() {
 }
 
 ################################################################################
-# validate_image_tag(tag)
-#   Validates a tag exists on docker.n8n.io or docker.io for n8nio/n8n.
+# validate_image_tag()
+# Description:
+#   Check whether a given n8n image tag exists in docker.n8n.io or docker.io.
+#
+# Behaviors:
+#   - Tries `docker manifest inspect` against both registries.
+#   - Logs an INFO line about the tag being validated.
+#
+# Returns:
+#   0 if the tag exists in either registry; 1 otherwise.
 ################################################################################
 validate_image_tag() {
     local tag="$1"
@@ -237,7 +272,15 @@ validate_image_tag() {
 
 ################################################################################
 # create_volumes()
-#   Ensures required Docker volumes exist for the stack and lists volumes.
+# Description:
+#   Ensure required named Docker volumes exist for the stack.
+#
+# Behaviors:
+#   - For each volume in VOLUMES: create if missing; log if present.
+#   - Prints `docker volume ls` at the end for visibility.
+#
+# Returns:
+#   0 always (best-effort creation/logging).
 ################################################################################
 create_volumes() {
     log INFO "Creating Docker volumes..."
@@ -255,9 +298,21 @@ create_volumes() {
 
 ################################################################################
 # prepare_compose_file()
-#   Copies docker-compose.yml and .env templates into $N8N_DIR (with backups),
-#   injects DOMAIN/SSL_EMAIL/N8N_IMAGE_TAG, rotates STRONG_PASSWORD if default/
-#   missing, and tightens file permissions.
+# Description:
+#   Populate $N8N_DIR with docker-compose.yml and .env, pin desired version,
+#   and rotate secrets if missing/default.
+#
+# Behaviors:
+#   - Copies templates from $PWD to $N8N_DIR (backing up existing as *.bak.TIMESTAMP).
+#   - Sets DOMAIN, SSL_EMAIL (if provided) in .env.
+#   - Resolves target n8n version: explicit -v or latest stable via get_latest_n8n_version().
+#   - Validates tag with validate_image_tag(); writes N8N_IMAGE_TAG in .env.
+#   - Rotates STRONG_PASSWORD (base64 16) if missing/default.
+#   - Rotates N8N_ENCRYPTION_KEY (base64 32) if missing/default.
+#   - Hardens permissions: .env (600), docker-compose.yml (640).
+#
+# Returns:
+#   0 on success; exits non-zero on missing templates or invalid tag.
 ################################################################################
 prepare_compose_file() {
     # Copy docker-compose and .env template to the target dir
@@ -346,9 +401,19 @@ prepare_compose_file() {
 
 ################################################################################
 # install_docker()
-#   Installs Docker Engine + Compose v2 using the official repo (with fallback
-#   to get.docker.com). Installs common dependencies, enables the service, and
-#   adds the invoking user to the docker group.
+# Description:
+#   Install Docker Engine and Compose v2 on Ubuntu with safe fallbacks.
+#
+# Behaviors:
+#   - If Docker present → skip install.
+#   - Else add Docker apt repo & key, install engine + compose plugin.
+#   - Fallback to get.docker.com script if apt install fails.
+#   - Installs common dependencies (jq, rsync, tar, msmtp, rclone, dnsutils, openssl, etc.).
+#   - Enables & starts docker via systemd if available.
+#   - Adds invoking user to docker group.
+#
+# Returns:
+#   0 on success (best-effort with fallbacks).
 ################################################################################
 install_docker() {
     if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
@@ -403,7 +468,16 @@ install_docker() {
 
 ################################################################################
 # print_summary_message()
-#   Prints a human-friendly summary: domain, version, timestamp, dirs, log file.
+# Description:
+#   Print a human-friendly final summary after install/upgrade.
+#
+# Behaviors:
+#   - Loads .env for current context.
+#   - Prints domain URL, detected n8n version, timestamp, user, target dir,
+#     SSL email (if set), and log file path.
+#
+# Returns:
+#   0 always.
 ################################################################################
 print_summary_message() {
     load_env_file
@@ -425,8 +499,22 @@ print_summary_message() {
 
 ################################################################################
 # install_n8n()
-#   Orchestrates a fresh install: prompt email (if missing), DNS check,
-#   Docker install, compose prep/validation, volumes, up, health, summary.
+# Description:
+#   Orchestrate a fresh installation of the n8n stack behind Traefik/LE.
+#
+# Behaviors:
+#   - Prompts for SSL_EMAIL if missing.
+#   - Verifies DOMAIN DNS points to this host (check_domain()).
+#   - Installs Docker/Compose and dependencies (install_docker()).
+#   - Prepares compose + .env with pinned version and secrets (prepare_compose_file()).
+#   - Validates compose/env (validate_compose_and_env()).
+#   - Creates named volumes (create_volumes()).
+#   - Starts stack (docker_compose_up()).
+#   - Waits for containers and TLS to be healthy (check_services_up_running()).
+#   - Prints a summary on success.
+#
+# Returns:
+#   0 on success; exits non-zero if any step fails.
 ################################################################################
 install_n8n() {
     log INFO "Starting N8N installation for domain: $DOMAIN"
@@ -443,9 +531,20 @@ install_n8n() {
 
 ################################################################################
 # upgrade_n8n()
-#   Determines target version (explicit or latest), prevents accidental
-#   downgrades unless --force, updates .env tag, `compose down`, re-validate,
-#   bring up, health check, summary.
+# Description:
+#   Upgrade (or force re-deploy/downgrade with -f) the running n8n stack.
+#
+# Behaviors:
+#   - Detects current n8n version; resolves target:
+#       * explicit -v, else latest stable via get_latest_n8n_version()
+#   - Prevents downgrades unless --force; prevents no-op redeploy unless --force.
+#   - Validates target tag with validate_image_tag().
+#   - Writes N8N_IMAGE_TAG to .env; brings stack down (compose down).
+#   - Re-validates compose/env; brings stack up; waits for health & TLS.
+#   - Prints a summary on success.
+#
+# Returns:
+#   0 on success; exits non-zero on validation/health failures.
 ################################################################################
 upgrade_n8n() {
     log INFO "Checking current and latest n8n versions..."
@@ -499,7 +598,18 @@ upgrade_n8n() {
 
 ################################################################################
 # cleanup_n8n()
-#   This will stop containers, remove the compose stack, and delete named resources
+# Description:
+#   Interactively tear down the stack and remove named resources.
+#
+# Behaviors:
+#   - Prints a plan and asks for confirmation.
+#   - Runs `compose down --remove-orphans`.
+#   - Removes named volumes in VOLUMES; respects KEEP_CERTS=true for letsencrypt.
+#   - Prunes dangling images; optionally removes base images if REMOVE_IMAGES=true.
+#   - Logs completion and whether certs were preserved.
+#
+# Returns:
+#   0 on completion; 0 if user cancels; non-zero only on unexpected errors.
 ################################################################################
 cleanup_n8n() {
     # Settings (can be overridden via env)
