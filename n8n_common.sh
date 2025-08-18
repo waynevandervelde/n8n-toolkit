@@ -20,7 +20,16 @@ IFS=$'\n\t'
 LOG_LEVEL="${LOG_LEVEL:-INFO}"; LOG_LEVEL="${LOG_LEVEL^^}"
 ################################################################################
 # log()
-#   Handles conditional logging based on the defined log level (DEBUG, INFO, WARN, ERROR)
+# Description:
+#   Structured logger with levels (DEBUG, INFO, WARN, ERROR) and timestamps.
+#
+# Behaviors:
+#   - Respects global LOG_LEVEL (defaults to INFO).
+#   - Prints WARN/ERROR to stderr; others to stdout.
+#   - Formats as: [YYYY-MM-DD HH:MM:SS] [LEVEL] message
+#
+# Returns:
+#   0 always.
 ################################################################################
 log() {
     local level="$1"
@@ -49,7 +58,15 @@ log() {
 
 ################################################################################
 # print_stacktrace()
-#   Helper for error diagnostics: prints a compact stack trace (most recent first).
+# Description:
+#   Print a compact stack trace (most recent call first) for error diagnostics.
+#
+# Behaviors:
+#   - Skips the trap frame.
+#   - Logs function name, source file, and line for each frame.
+#
+# Returns:
+#   0 always.
 ################################################################################
 print_stacktrace() {
     # Skip the last frame (the trap context)
@@ -68,7 +85,16 @@ print_stacktrace() {
 
 ################################################################################
 # on_interrupt()
-#   Trap for INT/TERM/HUP: logs, attempts to stop the stack cleanly, exits 130.
+# Description:
+#   Trap handler for INT/TERM/HUP: stop stack cleanly and exit.
+#
+# Behaviors:
+#   - Logs interrupt location.
+#   - Runs `docker compose down` for current N8N_DIR if compose file exists.
+#   - Exits with code 130.
+#
+# Returns:
+#   Never returns (exits 130).
 ################################################################################
 on_interrupt() {
     log ERROR "Interrupted by user (SIGINT) at ${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}:${BASH_LINENO[0]:-0} in ${FUNCNAME[1]:-main}(). Stopping containers and exiting..."
@@ -80,8 +106,17 @@ on_interrupt() {
 
 ################################################################################
 # on_error()
-#   Trap for ERR: logs failing command + location, prints stack, shows `ps`,
-#   exits with the original command’s exit code.
+# Description:
+#   Trap handler for ERR: log failing command/location, show stack & compose ps.
+#
+# Behaviors:
+#   - Logs failed command, file, line, and function.
+#   - Calls print_stacktrace().
+#   - Runs `docker compose ps` (if compose file present).
+#   - Exits with the original failing command’s exit code.
+#
+# Returns:
+#   Never returns (exits with prior exit code).
 ################################################################################
 on_error() {
     local exit_code=$?
@@ -103,8 +138,15 @@ on_error() {
 }
 
 ################################################################################
-# require_cmd(cmd)
-#   Bail out early with an error if the given command is not installed.
+# require_cmd()
+# Description:
+#   Ensure a required binary exists in PATH.
+#
+# Behaviors:
+#   - Logs ERROR if command is missing.
+#
+# Returns:
+#   0 if found; 1 if missing.
 ################################################################################
 require_cmd() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -115,7 +157,14 @@ require_cmd() {
 
 ################################################################################
 # check_root()
-#   Ensures the script is run as root (EUID=0). Exits if not.
+# Description:
+#   Ensure the script is running as root (EUID = 0).
+#
+# Behaviors:
+#   - Logs ERROR if not root.
+#
+# Returns:
+#   0 if root; 1 otherwise.
 ################################################################################
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -125,8 +174,15 @@ check_root() {
 }
 
 ################################################################################
-# upsert_env_var(key, value, file)
-#   Inserts or replaces KEY=VALUE in an .env file (idempotent).
+# upsert_env_var()
+# Description:
+#   Insert or update KEY=VALUE in a .env file idempotently.
+#
+# Behaviors:
+#   - Replaces existing line matching ^KEY=... or appends a new line.
+#
+# Returns:
+#   0 on success; non-zero on failure.
 ################################################################################
 upsert_env_var() {
 	local key="$1" val="$2" file="$3"
@@ -138,8 +194,16 @@ upsert_env_var() {
 }
 
 ################################################################################
-# mask_secret
-#	Show first/last 4 chars only
+# mask_secret()
+# Description:
+#   Mask a secret by showing only the first and last 4 characters.
+#
+# Behaviors:
+#   - If length ≤ 8, prints the string unchanged.
+#   - Else prints: XXXX***YYYY
+#
+# Returns:
+#   0 always (prints masked value to stdout).
 ################################################################################
 mask_secret() {
     # Show first/last 4 chars only
@@ -150,8 +214,15 @@ mask_secret() {
 }
 
 ################################################################################
-# load_env_file
-#	quick heuristic for base64-ish strings (no strict padding check)
+# looks_like_b64()
+# Description:
+#   Heuristic check whether a string looks like base64.
+#
+# Behaviors:
+#   - Tests against regex: ^[A-Za-z0-9+/=]+$
+#
+# Returns:
+#   0 if matches; 1 otherwise.
 ################################################################################
 looks_like_b64() {
     local s="$1"
@@ -159,7 +230,16 @@ looks_like_b64() {
 }
 
 ################################################################################
-# load_env_file
+# load_env_file()
+# Description:
+#   Load environment variables from a .env file into the current shell.
+#
+# Behaviors:
+#   - Uses provided path or falls back to ENV_FILE or $N8N_DIR/.env.
+#   - Warns and no-ops if file does not exist.
+#
+# Returns:
+#   0 on success or when file missing (no-op); non-zero on source errors.
 ################################################################################
 load_env_file() {
   local f="${1:-${ENV_FILE:-}}"
@@ -172,31 +252,18 @@ load_env_file() {
 }
 
 ################################################################################
-# read_env_var
-# Reads the value of a given key from a .env file.
+# read_env_var()
+# Description:
+#   Read and print the value of KEY from a .env-style file.
 #
-# Features:
-# - Ignores blank lines and full-line comments (# ...).
-# - Handles keys with surrounding spaces.
-# - Supports values that are:
-#     * Double-quoted → strips quotes and unescapes \"
-#     * Single-quoted → strips quotes
-#     * Unquoted → trims spaces, removes inline comments
-# - Handles values containing '=' (only the first '=' is treated as the separator).
-# - Prints the clean value to stdout if found.
+# Behaviors:
+#   - Ignores blank lines and full-line comments.
+#   - Supports unquoted, single-quoted, and double-quoted values.
+#   - Trims inline comments for unquoted values.
+#   - Only the first '=' is treated as the separator.
 #
 # Returns:
-#   0 if the key was found and printed
-#   1 if the file does not exist or the key was not found
-#
-# Usage:
-#   read_env_var /path/to/.env KEY
-# Example:
-#   DB_PASS=$(read_env_var ".env" "POSTGRES_PASSWORD")
-#
-# Notes:
-# - Only supports single-line values (not multi-line/heredoc).
-# - Safe for typical Docker Compose or n8n .env files.
+#   0 if key found (prints value); 1 if file missing or key not found.
 ################################################################################
 read_env_var() { # usage: read_env_var /path/.env KEY
     local file="$1" key="$2" line val
@@ -237,9 +304,19 @@ read_env_var() { # usage: read_env_var /path/.env KEY
 
     return 1
 }
+
 ################################################################################
-# ensure_encryption_key_exists
-#   # Ensure current .env HAS N8N_ENCRYPTION_KEY and it "looks" OK. Abort if missing.
+# ensure_encryption_key_exists()
+# Description:
+#   Verify N8N_ENCRYPTION_KEY exists in the given .env and looks reasonable.
+#
+# Behaviors:
+#   - Reads N8N_ENCRYPTION_KEY via read_env_var().
+#   - ERROR if missing; WARN if not base64-like.
+#   - Logs masked key on success.
+#
+# Returns:
+#   0 if present; 1 if missing.
 ################################################################################
 ensure_encryption_key_exists() {
     local env_file="$1"
@@ -256,10 +333,17 @@ ensure_encryption_key_exists() {
 }
 
 ################################################################################
-# parse_domain_arg(raw)
-#   Normalizes a domain-like string (strips scheme, path, port, www, whitespace,
-#   lowercases) and validates it against a strict hostname regex.
-#   Echoes the cleaned domain or exits(2) on invalid input.
+# parse_domain_arg()
+# Description:
+#   Normalize and validate a domain/hostname string.
+#
+# Behaviors:
+#   - Lowercases; strips scheme, path, query, fragment, port, trailing dot, and www.
+#   - Validates against strict hostname regex and overall length.
+#   - Prints normalized domain on success.
+#
+# Returns:
+#   0 on success (prints domain); exits 2 on invalid input.
 ################################################################################
 parse_domain_arg() {
     local raw="$1"
@@ -293,8 +377,15 @@ parse_domain_arg() {
 
 ################################################################################
 # compose()
-#   Wrapper for `docker compose` that always supplies --env-file "$ENV_FILE"
-#   and -f "$COMPOSE_FILE". Use this for all compose operations.
+# Description:
+#   Wrapper around `docker compose` that always supplies --env-file and -f.
+#
+# Behaviors:
+#   - Requires ENV_FILE and COMPOSE_FILE to be set.
+#   - Forwards all additional arguments to `docker compose`.
+#
+# Returns:
+#   Exit code from `docker compose`; 1 if ENV_FILE/COMPOSE_FILE unset.
 ################################################################################
 # Expect: ENV_FILE, COMPOSE_FILE set by caller scripts.
 compose() {
@@ -305,9 +396,17 @@ compose() {
 }
 
 ################################################################################
-# strict_env_check(compose_file, env_file)
-#   Scans the compose file for ${VARS} and verifies each exists in env_file.
-#   Prints missing keys and returns non-zero if any are absent.
+# strict_env_check()
+# Description:
+#   Validate that all ${VARS} used in compose file exist in the .env file.
+#
+# Behaviors:
+#   - Extracts ${VAR} tokens from compose file.
+#   - Builds a set of keys present in .env (ignores comments/blank).
+#   - Logs missing variables, if any.
+#
+# Returns:
+#   0 if all present; 1 if any are missing or .env is missing.
 ################################################################################
 strict_env_check() {
     local compose_file="$1" env_file="$2"
@@ -341,8 +440,16 @@ strict_env_check() {
 
 ################################################################################
 # validate_compose_and_env()
-#   Runs strict_env_check, then `docker compose config` via the wrapper to catch
-#   unresolved variables or syntax errors.
+# Description:
+#   Run strict_env_check and `compose config` to catch unset Vars/syntax errors.
+#
+# Behaviors:
+#   - Verifies COMPOSE_FILE and ENV_FILE exist.
+#   - Fails if strict_env_check reports missing keys.
+#   - Runs `compose config` and checks for "variable is not set" or errors.
+#
+# Returns:
+#   0 if valid; 1 on any validation error.
 ################################################################################
 validate_compose_and_env() {
     [[ -f "${COMPOSE_FILE:-}" ]] || { log ERROR "Missing COMPOSE_FILE"; return 1; }
@@ -366,8 +473,16 @@ validate_compose_and_env() {
 }
 
 ################################################################################
-# dump_service_logs(service [, tail=200])
-#   Prints last N log lines for a compose service (by service name).
+# dump_service_logs()
+# Description:
+#   Print the last N log lines for a specific compose service.
+#
+# Behaviors:
+#   - Resolves service container ID via compose.
+#   - Runs `docker logs --tail <N>` if container exists; warns if not found.
+#
+# Returns:
+#   0 always.
 ################################################################################
 dump_service_logs() {
     local svc="$1"; local tail="${2:-200}"
@@ -382,9 +497,16 @@ dump_service_logs() {
 }
 
 ################################################################################
-# dump_unhealthy_container_logs([tail=200])
-#   For all containers in this compose project:
-#     - If not running or unhealthy → print container name & tail logs.
+# dump_unhealthy_container_logs()
+# Description:
+#   For all containers in the compose project, print logs for non-running/unhealthy ones.
+#
+# Behaviors:
+#   - Iterates `compose ps -q` containers.
+#   - Inspects state and health; prints last logs for offenders.
+#
+# Returns:
+#   0 always.
 ################################################################################
 dump_unhealthy_container_logs() {
     local tail="${1:-200}"
@@ -406,11 +528,18 @@ dump_unhealthy_container_logs() {
     done
 }
 
-
 ################################################################################
-# wait_for_containers_healthy([timeout=180], [interval=10])
-#   Polls `compose ps` containers until all are running and healthy (or timeout).
-#   Logs status each interval; returns non-zero on timeout.
+# wait_for_containers_healthy()
+# Description:
+#   Wait until all compose containers are running and healthy (or timeout).
+#
+# Behaviors:
+#   - Polls every <interval> seconds (default 10) up to <timeout> (default 180).
+#   - Logs per-container status each cycle.
+#   - On timeout, lists offenders and dumps their logs.
+#
+# Returns:
+#   0 if all healthy before timeout; 1 on timeout.
 ################################################################################
 wait_for_containers_healthy() {
 	local timeout="${1:-180}"
@@ -475,7 +604,16 @@ wait_for_containers_healthy() {
 
 ################################################################################
 # check_container_healthy()
-#   Polls defined container until it's running & healthy (or times out).
+# Description:
+#   Wait until a specific container is running and healthy (or timeout).
+#
+# Behaviors:
+#   - Resolves container by compose service name, falling back to docker ps by name.
+#   - Accepts health "none" or "healthy" as OK when status is "running".
+#   - Polls every <interval> seconds until <timeout>.
+#
+# Returns:
+#   0 if healthy; 1 on timeout or not found.
 ################################################################################
 check_container_healthy() {
     local container_name="$1"
@@ -522,107 +660,23 @@ check_container_healthy() {
 }
 
 ################################################################################
-# verify_traefik_certificate_old()
-#   Optional post-deploy check:
-#     - Ensures HTTPS responds (200/301/302)
-#     - Retrieves and logs LE certificate issuer/subject/dates via openssl.
-################################################################################
-verify_traefik_certificate_old() {
-    local domain="${1:-${DOMAIN:-}}"
-    if [[ -z "$domain" ]]; then
-        log ERROR "verify_traefik_certificate: domain is empty"
-        return 1
-    fi
-
-    local domain_url="https://${domain}"
-    local MAX_RETRIES=6
-    local SLEEP_INTERVAL=10
-    local domain_ip=""
-    local response=""
-    local success=false
-    
-    if command -v dig >/dev/null 2>&1; then
-        log INFO "Checking DNS resolution for domain..."
-        domain_ip=$(dig +short "$domain")
-        if [[ -z "$domain_ip" ]]; then
-            log ERROR "DNS lookup failed for $domain. Ensure it points to your server's IP."
-            return 1
-        fi
-        log INFO "Domain $domain resolves to IP: $domain_ip"
-    else
-        log WARN "'dig' not found; skipping DNS lookup step."
-    fi
-
-    log INFO "Checking if your domain is reachable via HTTPS..."
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$domain_url" || true)
-        if [[ "$response" == "200" || "$response" == "301" || "$response" == "302" || "$response" == "308" ]]; then
-            log INFO "$domain is reachable with HTTPS (HTTP $response)"
-            success=true
-            break
-        elif [[ "$response" == "000" || -z "$response" ]]; then
-            log WARN "No HTTPS response received (attempt $i/$MAX_RETRIES). Traefik or certs might not be ready."
-        else
-            log WARN "Domain not reachable (HTTP $response) (attempt $i/$MAX_RETRIES)."
-        fi
-        [[ $i -lt $MAX_RETRIES ]] && { log INFO "Retrying in ${SLEEP_INTERVAL}s..."; sleep $SLEEP_INTERVAL; }
-    done
-
-    if [[ "$success" != true ]]; then
-        log ERROR "$domain is not reachable via HTTPS after $MAX_RETRIES attempts."
-        dump_service_logs traefik 200
-        log INFO "Tip: follow live Traefik logs with:  docker logs -f traefik"
-        return 1
-    fi
-
-    if ! command -v openssl >/dev/null 2>&1; then
-        log WARN "'openssl' not found; skipping certificate inspection."
-        return 0
-    fi
-
-    log INFO "Validating SSL certificate from Let's Encrypt..."
-    for ((i=1; i<=MAX_RETRIES; i++)); do
-        local cert_info issuer subject not_before not_after
-        cert_info=$(echo | openssl s_client -connect "$domain:443" -servername "$domain" 2>/dev/null | \
-                    openssl x509 -noout -issuer -subject -dates || true)
-        if [[ -n "$cert_info" ]]; then
-            issuer=$(echo "$cert_info"  | grep '^issuer='   || true)
-            subject=$(echo "$cert_info" | grep '^subject='  || true)
-            not_before=$(echo "$cert_info" | grep '^notBefore=' || true)
-            not_after=$(echo "$cert_info"  | grep '^notAfter='  || true)
-            [[ -n "$issuer"     ]] && log INFO "Issuer: $issuer"
-            [[ -n "$subject"    ]] && log INFO "Subject: $subject"
-            [[ -n "$not_before" ]] && log INFO "Certificate Valid from: ${not_before#notBefore=}"
-            [[ -n "$not_after"  ]] && log INFO "Certificate Expires on: ${not_after#notAfter=}"
-            return 0
-        else
-            log WARN "Unable to retrieve certificate (attempt $i/$MAX_RETRIES)."
-            [[ $i -lt $MAX_RETRIES ]] && sleep $SLEEP_INTERVAL
-        fi
-    done
-
-    log ERROR "Could not retrieve certificate details after $MAX_RETRIES attempts."
-    dump_service_logs traefik 200
-    log INFO "Tip: follow live Traefik logs with:  docker logs -f traefik"
-    return 1
-}
-
-################################################################################
-# verify_traefik_certificate(domain = $DOMAIN, retries = 6, sleep = 10)
-# Purpose:
-#   - Optional Traefik liveness via /ping (if enabled on :8082)
-#   - DNS A/AAAA + CAA sanity hints
-#   - HTTP (80) redirect sanity
-#   - Detect common proxy (e.g., Cloudflare) that can break TLS-ALPN
-#   - TCP/443 reachability (required for TLS-ALPN)
-#   - HTTPS reachability with a valid chain (no -k)
-#   - Certificate inspection (issuer/subject/SAN/dates)
-#   - Chain verification against system CA bundle
-#   - Expiry warning (<30 days)
+# verify_traefik_certificate()
+# Description:
+#   Comprehensive Traefik/cert sanity: /ping, DNS hints, HTTP redirect,
+#   proxy detection, TCP/443 probe, HTTPS reachability, cert details & expiry.
 #
-# Notes:
-#   - Optional: set SERVER_PUBLIC_IP in .env to force curl to your IP with --resolve
-#   - Requires: curl, openssl; optionally dig, timeout (for /dev/tcp probe)
+# Behaviors:
+#   - Optional: traefik /ping on :8082 if enabled.
+#   - DNS A/AAAA and CAA hints via dig (if available).
+#   - Warns if Cloudflare proxy detected on HTTP (may break TLS-ALPN).
+#   - Optional TCP/443 reachability probe.
+#   - Retries HTTPS for acceptable codes (200/301/302/308).
+#   - Fetches leaf cert; logs issuer/subject/SAN/dates.
+#   - Verifies chain against system CA bundle if present.
+#   - Warns if not Let's Encrypt; warns if expiry <30 days.
+#
+# Returns:
+#   0 if checks pass; non-zero if HTTPS fails or cert invalid.
 ################################################################################
 verify_traefik_certificate() {
     local domain="${1:-${DOMAIN:-}}"
@@ -637,7 +691,7 @@ verify_traefik_certificate() {
         return 1
     fi
 
-    # 0) Traefik /ping (only if you enabled --ping and :8082 in compose)
+    # Traefik /ping (only if you enabled --ping and :8082 in compose)
     if docker ps --format '{{.Names}}' | grep -qx traefik; then
         if docker inspect traefik | grep -q ':8082'; then
             if docker exec traefik wget --spider -q http://localhost:8082/ping; then
@@ -648,7 +702,7 @@ verify_traefik_certificate() {
         fi
     fi
 
-    # 1) DNS details (A/AAAA + CAA hints)
+    # DNS details (A/AAAA + CAA hints)
     if command -v dig >/dev/null 2>&1; then
         log INFO "DNS A records for ${domain}:"
         dig +short A "$domain" | sed 's/^/  - /' || true
@@ -673,7 +727,7 @@ verify_traefik_certificate() {
         log INFO "Forcing HTTPS check to ${SERVER_PUBLIC_IP} via --resolve"
     fi
 
-    # 2) HTTP (80) should redirect to HTTPS (or 200 during ACME challenge)
+    # HTTP (80) should redirect to HTTPS (or 200 during ACME challenge)
     http_code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "http://${domain}" || true)"
     if [[ "$http_code" == "301" || "$http_code" == "302" || "$http_code" == "308" ]]; then
         log INFO "HTTP redirect ${http_code} -> https is working"
@@ -683,14 +737,14 @@ verify_traefik_certificate() {
         log WARN "HTTP check failed for ${domain}: code=${http_code}"
     fi
 
-    # 3) Detect common proxy (e.g., Cloudflare) which can break TLS-ALPN unless TLS terminates at Traefik
+    # Detect common proxy (e.g., Cloudflare) which can break TLS-ALPN unless TLS terminates at Traefik
     local srv_hdr
     srv_hdr="$(curl -sI "http://${domain}" "${curl_resolve_arg[@]}" | awk -F': ' 'tolower($1)=="server"{print tolower($2)}' | tr -d '\r')"
     if echo "$srv_hdr" | grep -q 'cloudflare'; then
         log WARN "Cloudflare proxy detected. TLS-ALPN may fail. Consider DNS-only (grey cloud) or switch to DNS-01."
     fi
 
-    # 4) Quick TCP probe to 443 (TLS-ALPN requires direct 443 reachability)
+    # Quick TCP probe to 443 (TLS-ALPN requires direct 443 reachability)
     if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then
         if ! timeout 3 bash -c "</dev/tcp/${domain}/443" 2>/dev/null; then
             log ERROR "TCP 443 is not reachable on ${domain}. TLS-ALPN requires direct 443 access."
@@ -699,7 +753,7 @@ verify_traefik_certificate() {
         log INFO "TCP 443 is reachable on ${domain}"
     fi
 
-    # 5) HTTPS reachability with a valid chain (no -k)
+    # HTTPS reachability with a valid chain (no -k)
     log INFO "Checking HTTPS reachability (must be a valid chain)…"
     for ((i=1; i<=max_retries; i++)); do
         http_code="$(curl -sS -o /dev/null -w '%{http_code}' --fail \
@@ -722,7 +776,7 @@ verify_traefik_certificate() {
         return 1
     fi
 
-    # 6) Certificate introspection and chain validation
+    # Certificate introspection and chain validation
     if ! command -v openssl >/dev/null 2>&1; then
         log WARN "'openssl' not found; skipping certificate inspection."
         return 0
@@ -792,10 +846,18 @@ verify_traefik_certificate() {
 
     return 0
 }
+
 ################################################################################
 # get_current_n8n_version()
-#   Determines the running n8n version by exec'ing into the n8n container.
-#   Falls back to "unknown" if not running.
+# Description:
+#   Print the running n8n version by exec'ing into the n8n container.
+#
+# Behaviors:
+#   - Tries `compose ps -q n8n`; falls back to `docker exec n8n`.
+#   - Prints "unknown" if not available.
+#
+# Returns:
+#   0 always (prints version or "unknown").
 ################################################################################
 get_current_n8n_version() {
     local cid
@@ -808,7 +870,15 @@ get_current_n8n_version() {
 
 ################################################################################
 # get_latest_n8n_version()
-#   Fetches the latest stable semver tag from Docker Hub (n8nio/n8n).
+# Description:
+#   Fetch the latest stable semver tag (x.y.z) of n8n from Docker Hub.
+#
+# Behaviors:
+#   - Requests tags page and filters stable semver names.
+#   - Prints the newest version (by sort -Vr | head -n1).
+#
+# Returns:
+#   0 on success (may print empty on API issues); 1 if jq missing.
 ################################################################################
 get_latest_n8n_version() {
     if ! command -v jq >/dev/null 2>&1; then
@@ -827,8 +897,16 @@ get_latest_n8n_version() {
 
 ################################################################################
 # fetch_all_stable_versions()
-#   Retrieves all stable semver tags (paginated) from Docker Hub.
-#   Prints unique, natural-sorted ascending list of x.y.z.
+# Description:
+#   Retrieve and print all stable semver tags (x.y.z) from Docker Hub.
+#
+# Behaviors:
+#   - Requires jq.
+#   - Follows pagination; aggregates results.
+#   - Prints unique ascending-sorted list.
+#
+# Returns:
+#   0 on success (even if none found); 1 if jq missing.
 ################################################################################
 fetch_all_stable_versions() {
     if ! command -v jq >/dev/null 2>&1; then
@@ -860,7 +938,14 @@ fetch_all_stable_versions() {
 
 ################################################################################
 # docker_compose_up()
-#   Starts the stack in detached mode using the compose wrapper.
+# Description:
+#   Start the compose stack in detached mode via the compose wrapper.
+#
+# Behaviors:
+#   - Logs start message then runs `compose up -d`.
+#
+# Returns:
+#   Exit code from `compose up -d`.
 ################################################################################
 docker_compose_up() {
     log INFO "Starting Docker Compose..."
@@ -869,8 +954,16 @@ docker_compose_up() {
 
 ################################################################################
 # check_services_up_running()
-#   Composite health gate: waits for healthy containers and (optionally) checks
-#   the TLS certificate.
+# Description:
+#   High-level health gate for the stack: containers + TLS certificate.
+#
+# Behaviors:
+#   - Calls wait_for_containers_healthy().
+#   - Calls verify_traefik_certificate "$DOMAIN".
+#   - Logs ERROR and returns non-zero on any failure.
+#
+# Returns:
+#   0 if all checks pass; 1 otherwise.
 ################################################################################
 check_services_up_running() {
     if ! wait_for_containers_healthy; then
