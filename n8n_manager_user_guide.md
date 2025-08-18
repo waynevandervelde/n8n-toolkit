@@ -167,8 +167,9 @@ The script will:
    5. **Create volumes** and start the stack behind Traefik.
    6. **Wait for health checks** to pass.
 
-Ultimately, you’ll see a summary that includes your URL, version, and log file path.
-```
+Ultimately, you’ll see a summary that includes your URL, version, and log file path:
+
+```bash
 ─────────────────────────────────────────────────────────
 N8N has been successfully installed!
 Domain:             https://n8n.YourDomain.com
@@ -209,7 +210,7 @@ sudo ./n8n_manager.sh -u n8n.YourDomain.com -d /path/to/n8n
 ```
 
 - On success, you’ll see:
-```
+```bash
 ─────────────────────────────────────────────────────────
 N8N has been successfully upgraded!
 Domain:             https://n8n.YourDomain.com
