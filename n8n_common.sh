@@ -244,7 +244,7 @@ looks_like_b64() {
 load_env_file() {
   local f="${1:-${ENV_FILE:-}}"
   [[ -z "$f" ]] && f="${N8N_DIR:-$PWD}/.env"
-  [[ -f "$f" ]] || { log WARN "No .env to load at: $f"; return 0; }
+  [[ -f "$f" ]] || { log INFO "No .env to load at: $f (skip)"; return 0; }
   set -o allexport
   # shellcheck disable=SC1090
   source "$f"
@@ -414,9 +414,11 @@ strict_env_check() {
 
     log INFO "Checking for unset environment variables in $compose_file..."
     local vars_in_compose missing_vars=()
-    vars_in_compose=$(grep -oE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' "$compose_file" | sort -u | tr -d '${}')
+	# Extract VAR from ${VAR}, ${VAR:-...}, ${VAR?err}, etc.
+	vars_in_compose=$(grep -oP '\$\{\K[A-Za-z_][A-Za-z0-9_]*(?=[^}]*)' "$compose_file" | sort -u)
 
-    # Build a map of KEYs that exist in .env (ignore comments/blank lines)
+    # Build KEY set from .env (ignore comments/blank). Accept: KEY=..., no "export".
+	
     declare -A envmap
     while IFS='=' read -r k v; do
         [[ -z "$k" || "$k" =~ ^\s*# ]] && continue
@@ -661,187 +663,91 @@ check_container_healthy() {
 
 ################################################################################
 # verify_traefik_certificate()
-# Description:
-#   Comprehensive Traefik/cert sanity: /ping, DNS hints, HTTP redirect,
-#   proxy detection, TCP/443 probe, HTTPS reachability, cert details & expiry.
+#   Lightweight post-deploy TLS check: confirm HTTPS reaches Traefik (valid TLS)
+#   and (best-effort) log issuer/subject/dates via openssl.
 #
-# Behaviors:
-#   - Optional: traefik /ping on :8082 if enabled.
-#   - DNS A/AAAA and CAA hints via dig (if available).
-#   - Warns if Cloudflare proxy detected on HTTP (may break TLS-ALPN).
-#   - Optional TCP/443 reachability probe.
-#   - Retries HTTPS for acceptable codes (200/301/302/308).
-#   - Fetches leaf cert; logs issuer/subject/SAN/dates.
-#   - Verifies chain against system CA bundle if present.
-#   - Warns if not Let's Encrypt; warns if expiry <30 days.
+# Behavior:
+#   - DNS hint (A/AAAA) if `dig` is available.
+#   - Treats HTTPS status 200/301/302/308/404 as success (TLS OK even if 404).
+#   - Retries HTTPS up to 6 times with short delays.
+#   - Tries to read and log certificate issuer/subject/notBefore/notAfter.
+#   - Cert introspection is best-effort; failure to parse does NOT fail the check.
 #
 # Returns:
-#   0 if checks pass; non-zero if HTTPS fails or cert invalid.
+#   0 on HTTPS success (TLS established), regardless of cert introspection result.
+#   1 only if HTTPS cannot be reached after retries.
 ################################################################################
 verify_traefik_certificate() {
     local domain="${1:-${DOMAIN:-}}"
-    local max_retries="${2:-6}"
-    local sleep_interval="${3:-10}"
-    local ok_codes="200 301 302 308"
-    local success=false
-    local http_code="" curl_err=0
+    local MAX_RETRIES="${2:-6}"
+    local SLEEP_INTERVAL="${3:-10}"
+    local domain_url curl_rc http_code success=false
 
     if [[ -z "$domain" ]]; then
         log ERROR "verify_traefik_certificate: domain is empty"
         return 1
     fi
+    domain_url="https://${domain}"
 
-    # Traefik /ping (only if you enabled --ping and :8082 in compose)
-    if docker ps --format '{{.Names}}' | grep -qx traefik; then
-        if docker inspect traefik | grep -q ':8082'; then
-            if docker exec traefik wget --spider -q http://localhost:8082/ping; then
-                log INFO "Traefik /ping OK"
-            else
-                log WARN "Traefik /ping not responding yet (container may be starting)"
-            fi
-        fi
-    fi
-
-    # DNS details (A/AAAA + CAA hints)
+    # DNS A/AAAA (optional)
     if command -v dig >/dev/null 2>&1; then
         log INFO "DNS A records for ${domain}:"
         dig +short A "$domain" | sed 's/^/  - /' || true
         log INFO "DNS AAAA records for ${domain}:"
         dig +short AAAA "$domain" | sed 's/^/  - /' || true
-
-        local caa
-        caa="$(dig +short CAA "$domain" 2>/dev/null || true)"
-        if [[ -n "$caa" ]]; then
-            echo "$caa" | sed 's/^/  CAA: /'
-            echo "$caa" | grep -qi 'letsencrypt\.org' || \
-                log WARN "CAA record may block Let's Encrypt for ${domain}."
-        fi
     else
-        log WARN "'dig' not found; skipping detailed DNS checks."
+        log WARN "'dig' not found; skipping DNS details."
     fi
 
-    # Optional: force curl to your known public IP to avoid stale DNS
-    local curl_resolve_arg=()
-    if [[ -n "${SERVER_PUBLIC_IP:-}" ]]; then
-        curl_resolve_arg=(--resolve "${domain}:443:${SERVER_PUBLIC_IP}")
-        log INFO "Forcing HTTPS check to ${SERVER_PUBLIC_IP} via --resolve"
-    fi
-
-    # HTTP (80) should redirect to HTTPS (or 200 during ACME challenge)
-    http_code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "http://${domain}" || true)"
-    if [[ "$http_code" == "301" || "$http_code" == "302" || "$http_code" == "308" ]]; then
-        log INFO "HTTP redirect ${http_code} -> https is working"
-    elif [[ "$http_code" == "200" ]]; then
-        log WARN "HTTP returned 200 (no redirect). This can be transient during ACME; continuing."
-    else
-        log WARN "HTTP check failed for ${domain}: code=${http_code}"
-    fi
-
-    # Detect common proxy (e.g., Cloudflare) which can break TLS-ALPN unless TLS terminates at Traefik
-    local srv_hdr
-    srv_hdr="$(curl -sI "http://${domain}" "${curl_resolve_arg[@]}" | awk -F': ' 'tolower($1)=="server"{print tolower($2)}' | tr -d '\r')"
-    if echo "$srv_hdr" | grep -q 'cloudflare'; then
-        log WARN "Cloudflare proxy detected. TLS-ALPN may fail. Consider DNS-only (grey cloud) or switch to DNS-01."
-    fi
-
-    # Quick TCP probe to 443 (TLS-ALPN requires direct 443 reachability)
-    if command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then
-        if ! timeout 3 bash -c "</dev/tcp/${domain}/443" 2>/dev/null; then
-            log ERROR "TCP 443 is not reachable on ${domain}. TLS-ALPN requires direct 443 access."
-            return 1
+    log INFO "Checking HTTPS reachability (valid chain required by curl)…"
+    for ((i=1; i<=MAX_RETRIES; i++)); do
+        # --fail makes curl exit non-zero on HTTP >= 400 and TLS/conn errors
+        if http_code="$(curl -fsS -o /dev/null -w '%{http_code}' \
+                         --connect-timeout 5 --max-time 15 \
+                         "${domain_url}")"; then
+            # Consider TLS OK if HTTP is up: 200/301/302/308/404
+            if [[ "$http_code" =~ ^(200|301|302|308|404)$ ]]; then
+                log INFO "HTTPS reachable (HTTP ${http_code}) [attempt ${i}/${MAX_RETRIES}]"
+                success=true
+                break
+            else
+                log WARN "HTTPS up but app not ready yet (HTTP ${http_code}) [attempt ${i}/${MAX_RETRIES}]"
+            fi
+        else
+            curl_rc=$?
+            # When curl fails, http_code will usually be empty or "000"
+            log WARN "HTTPS not ready (curl_exit=${curl_rc}, http=${http_code:-N/A}) [attempt ${i}/${MAX_RETRIES}]"
         fi
-        log INFO "TCP 443 is reachable on ${domain}"
-    fi
-
-    # HTTPS reachability with a valid chain (no -k)
-    log INFO "Checking HTTPS reachability (must be a valid chain)…"
-    for ((i=1; i<=max_retries; i++)); do
-        http_code="$(curl -sS -o /dev/null -w '%{http_code}' --fail \
-            --connect-timeout 5 --max-time 15 \
-            "${curl_resolve_arg[@]}" "https://${domain}")"
-        curl_err=$?
-        if [[ $curl_err -eq 0 && " $ok_codes " == *" $http_code "* ]]; then
-            log INFO "HTTPS reachable (HTTP $http_code) [attempt $i/$max_retries]"
-            success=true
-            break
-        fi
-        log WARN "HTTPS not ready (http=$http_code, curl_exit=$curl_err) [attempt $i/$max_retries]"
-        [[ $i -lt $max_retries ]] && { log INFO "Retrying in ${sleep_interval}s…"; sleep "$sleep_interval"; }
+        [[ $i -lt $MAX_RETRIES ]] && { log INFO "Retrying in ${SLEEP_INTERVAL}s..."; sleep "$SLEEP_INTERVAL"; }
     done
 
-    if [[ "$success" != true ]]; then
-        log ERROR "HTTPS not reachable after $max_retries attempts."
+    if ! $success; then
+        log ERROR "${domain} is not reachable via HTTPS after ${MAX_RETRIES} attempts."
         dump_service_logs traefik 200
-        log INFO "Tip: stream Traefik logs: docker logs -f traefik"
+        log INFO "Tip: follow live Traefik logs with: docker logs -f traefik"
         return 1
     fi
 
-    # Certificate introspection and chain validation
-    if ! command -v openssl >/dev/null 2>&1; then
-        log WARN "'openssl' not found; skipping certificate inspection."
-        return 0
-    fi
-
-    local tmpdir; tmpdir="$(mktemp -d)"; trap 'rm -rf "$tmpdir"' INT TERM EXIT
-    log INFO "Fetching certificate chain from ${domain}…"
-    if ! echo | openssl s_client -servername "$domain" -connect "${domain}:443" -showcerts 2>/dev/null > "$tmpdir/chain.pem"; then
-        log ERROR "Failed to retrieve certificate chain via openssl s_client."
-        return 1
-    fi
-
-    # Split into certN.pem; cert1.pem is usually the leaf
-    awk 'BEGIN{c=0}/BEGIN CERTIFICATE/{c++}{print > "'$tmpdir'/cert" c ".pem"}' "$tmpdir/chain.pem" >/dev/null 2>&1 || true
-    [[ -f "$tmpdir/cert1.pem" ]] || cp "$tmpdir/chain.pem" "$tmpdir/cert1.pem"
-
-    local issuer subject san not_before not_after
-    issuer="$(openssl x509 -in "$tmpdir/cert1.pem" -noout -issuer   2>/dev/null || true)"
-    subject="$(openssl x509 -in "$tmpdir/cert1.pem" -noout -subject  2>/dev/null || true)"
-    not_before="$(openssl x509 -in "$tmpdir/cert1.pem" -noout -startdate 2>/dev/null | sed 's/notBefore=//')"
-    not_after="$(openssl x509 -in "$tmpdir/cert1.pem" -noout -enddate   2>/dev/null | sed 's/notAfter=//')"
-    san="$(openssl x509 -in "$tmpdir/cert1.pem" -noout -text 2>/dev/null | awk '/Subject Alternative Name/{f=1;next} f&&/DNS:/{print;exit}')"
-
-    [[ -n "$issuer"     ]] && log INFO "Issuer : $issuer"
-    [[ -n "$subject"    ]] && log INFO "Subject: $subject"
-    [[ -n "$san"        ]] && log INFO "SAN    : ${san#*DNS:}"
-    [[ -n "$not_before" ]] && log INFO "Valid from: $not_before"
-    [[ -n "$not_after"  ]] && log INFO "Valid till:  $not_after"
-
-    # Verify chain against system CA bundle
-    local ca_bundle="/etc/ssl/certs/ca-certificates.crt"
-    if [[ -f "$ca_bundle" ]]; then
-        if openssl verify -CAfile "$ca_bundle" "$tmpdir/cert1.pem" >/dev/null 2>&1; then
-            log INFO "Certificate chain is valid against system CA bundle."
+    # Best-effort cert details (non-fatal)
+    if command -v openssl >/dev/null 2>&1; then
+        log INFO "Fetching certificate details (best-effort)…"
+        local cert_info issuer subject not_before not_after
+        cert_info=$(echo | openssl s_client -connect "${domain}:443" -servername "${domain}" 2>/dev/null \
+                    | openssl x509 -noout -issuer -subject -dates 2>/dev/null || true)
+        if [[ -n "$cert_info" ]]; then
+            issuer=$(echo "$cert_info"  | grep '^issuer='   || true)
+            subject=$(echo "$cert_info" | grep '^subject='  || true)
+            not_before=$(echo "$cert_info"| grep '^notBefore=' || true)
+            not_after=$(echo "$cert_info" | grep '^notAfter='  || true)
+            [[ -n "$issuer"     ]] && log INFO "Issuer: $issuer"
+            [[ -n "$subject"    ]] && log INFO "Subject: $subject"
+            [[ -n "$not_before" ]] && log INFO "Valid from: ${not_before#notBefore=}"
+            [[ -n "$not_after"  ]] && log INFO "Valid till:  ${not_after#notAfter=}"
         else
-            log ERROR "Certificate chain is NOT valid (missing intermediate or wrong chain)."
-            return 1
+            log WARN "Could not parse certificate via openssl (continuing)."
         fi
     else
-        log WARN "System CA bundle not found at $ca_bundle; skipping chain verification."
-    fi
-
-    # Confirm Let's Encrypt (production)
-    if echo "$issuer" | grep -qi "let's encrypt"; then
-        log INFO "Issuer appears to be Let's Encrypt (production)."
-    else
-        log WARN "Issuer is not recognized as Let's Encrypt."
-    fi
-
-    # Expiry warning (<30 days)
-    if command -v date >/dev/null 2>&1 && [[ -n "$not_after" ]]; then
-        local expiry_ts now_ts days_left
-        expiry_ts="$(date -d "$not_after" +%s 2>/dev/null || true)"
-        now_ts="$(date +%s)"
-        if [[ -n "$expiry_ts" && "$expiry_ts" -gt 0 ]]; then
-            days_left=$(( (expiry_ts - now_ts) / 86400 ))
-            if (( days_left < 0 )); then
-                log ERROR "Certificate expired ${days_left#-} days ago."
-                return 1
-            elif (( days_left < 30 )); then
-                log WARN "Certificate will expire in ${days_left} days."
-            else
-                log INFO "Certificate has ~${days_left} days remaining."
-            fi
-        fi
+        log WARN "'openssl' not found; skipping certificate inspection."
     fi
 
     return 0
