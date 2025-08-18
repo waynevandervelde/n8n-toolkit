@@ -66,20 +66,47 @@ DRIVE_LINK=""
 RCLONE_FLAGS=(--transfers=4 --checkers=8 --retries=5 --low-level-retries=10 --contimeout=30s --timeout=5m --retries-sleep=10s)
 
 ################################################################################
-# box_line
+# box_line()
+# Description:
+#   Print a left-aligned label (fixed width 22) and a value on one line.
+#
+# Behaviors:
+#   - Uses printf "%-22s%s\n" to align the status box output.
+#
+# Returns:
+#   0 always.
 ################################################################################
 box_line() { printf "%-22s%s\n" "$1" "$2"; }
 
 ################################################################################
-# can_send_email
+# can_send_email()
+# Description:
+#   Check whether SMTP config is sufficient to send email.
+#
+# Behaviors:
+#   - Verifies EMAIL_TO, SMTP_USER, SMTP_PASS are all non-empty.
+#
+# Returns:
+#   0 if all present; 1 otherwise.
 ################################################################################
 can_send_email() {
     [[ -n "$EMAIL_TO" && -n "$SMTP_USER" && -n "$SMTP_PASS" ]]
 }
 
 ################################################################################
-# send_email(subject, body[, attachment])
-#   Send an email via Gmail SMTP using msmtp.
+# send_email()
+# Description:
+#   Send a multipart email via Gmail SMTP (msmtp), optional attachment.
+#
+# Behaviors:
+#   - No-op if EMAIL_EXPLICIT=false.
+#   - Validates SMTP creds; logs error and returns non-zero if missing.
+#   - Builds multipart MIME with text body and optional base64 attachment.
+#   - Pipes message to msmtp with STARTTLS (smtp.gmail.com:587).
+#   - Sets EMAIL_SENT=true on success.
+#
+# Returns:
+#   0 on success; non-zero if send fails.
 ################################################################################
 send_email() {
     local subject="$1"
@@ -154,7 +181,16 @@ send_email() {
 
 ################################################################################
 # handle_error()
-#   Trap for any uncaught error: logs, sends failure email, and exits.
+# Description:
+#   Global ERR trap: record failure, notify, and exit.
+#
+# Behaviors:
+#   - Appends FAIL line to backup_summary.md (if context exists).
+#   - Logs error and emails failure with LOG_FILE attached (if possible).
+#   - Exits the script with status 1.
+#
+# Returns:
+#   Never returns (exits 1).
 ################################################################################
 handle_error() {
   # Try to append to the summary only if we have enough context
@@ -196,7 +232,16 @@ EOF
 
 ################################################################################
 # initialize_snapshot()
-#   On first run, mirror live volumes & config into snapshot/ for change checks.
+# Description:
+#   Create the initial snapshot tree for change detection.
+#
+# Behaviors:
+#   - Creates snapshot directories for each volume and for config.
+#   - Rsyncs current data of volumes and config (.env, docker-compose.yml).
+#   - Skips if snapshot already exists.
+#
+# Returns:
+#   0 on success; non-zero on failure.
 ################################################################################
 initialize_snapshot() {
     if [[ ! -d "$BACKUP_DIR/snapshot" ]]; then
@@ -215,7 +260,15 @@ initialize_snapshot() {
 
 ################################################################################
 # refresh_snapshot()
-#   After a successful backup, mirror live volumes & config into snapshot/
+# Description:
+#   Update snapshot after a successful backup.
+#
+# Behaviors:
+#   - Rsyncs (with --delete) live volumes into snapshot (excludes PG transient dirs).
+#   - Rsyncs current .env and docker-compose.yml into snapshot/config.
+#
+# Returns:
+#   0 on success; non-zero on failure.
 ################################################################################
 refresh_snapshot() {
   log INFO "Updating snapshot to current state"
@@ -234,10 +287,16 @@ refresh_snapshot() {
 
 ################################################################################
 # is_system_changed()
-#   Compares live volumes & config against the snapshot.
-#   Excludes pg_wal, pg_stat_tmp, pg_logical dirs (to avoid false positives).
-#   Returns 0 if any file has been added/modified (i.e. system changed),
-#   Returns 1 otherwise.
+# Description:
+#   Determine if live data differs from the snapshot (to decide backup).
+#
+# Behaviors:
+#   - For each volume: rsync dry-run with excludes (pg_wal, pg_stat_tmp, pg_logical).
+#   - For configs: rsync dry-run on .env and docker-compose.yml.
+#   - If any file changes detected → considered "changed".
+#
+# Returns:
+#   0 if changed; 1 if no differences.
 ################################################################################
 is_system_changed() {
     local src dest diffs file
@@ -283,9 +342,15 @@ is_system_changed() {
 
 ################################################################################
 # get_google_drive_link()
-#   If RCLONE_REMOTE is set, reads root_folder_id
-#   from rclone.conf and echoes the Drive folder URL.
-#   Otherwise echoes an empty string.
+# Description:
+#   Produce Google Drive folder URL for the configured rclone remote.
+#
+# Behaviors:
+#   - Reads root_folder_id from `rclone config show <remote>`.
+#   - Prints folder URL if found; prints empty string otherwise.
+#
+# Returns:
+#   0 always (outputs URL or empty on stdout).
 ################################################################################
 get_google_drive_link() {
     # If no remote or no target, output nothing
@@ -308,8 +373,17 @@ get_google_drive_link() {
 }
 
 ################################################################################
-# write_summary(action, status)
-#   Appends a row to backup_summary.md and prunes entries older than 30 days.
+# write_summary()
+# Description:
+#   Append action/status to backup_summary.md and prune entries >30 days old.
+#
+# Behaviors:
+#   - Creates header if file is missing.
+#   - Appends a table row: DATE | ACTION | N8N_VERSION | STATUS.
+#   - Keeps only rows with DATE >= cutoff (30 days ago), preserving header.
+#
+# Returns:
+#   0 on success; non-zero on failure.
 ################################################################################
 write_summary() {
     local action="$1" status="$2"
@@ -342,9 +416,21 @@ EOF
 
 ################################################################################
 # do_local_backup()
-#   Performs the “local backup” step: volumes → tar.gz,
-#   DB dump, config files, final archive.  On success sets
-#   $BACKUP_FILE and returns 0; on any error returns 1.
+# Description:
+#   Execute local backup: volumes, Postgres dump, config copy, compress, checksum.
+#
+# Behaviors:
+#   - Verifies N8N_ENCRYPTION_KEY exists in .env.
+#   - Archives each Docker volume to BACKUP_PATH as tar.gz chunks.
+#   - Dumps Postgres DB from container "postgres" to SQL file.
+#   - Copies .env and docker-compose.yml as *.bak.
+#   - Compresses BACKUP_PATH into BACKUP_DIR/n8n_backup_<ver>_<ts>.tar.gz
+#       * Uses `tar | pigz` if pigz exists; else `tar -czf`.
+#   - Generates SHA-256 checksum for the archive.
+#   - Prunes old archives/checksums older than DAYS_TO_KEEP.
+#
+# Returns:
+#   0 on success; non-zero on any failure.
 ################################################################################
 do_local_backup() {
     # Make sure encryption key exists BEFORE taking backup
@@ -428,7 +514,18 @@ do_local_backup() {
 
 ################################################################################
 # upload_backup_rclone()
-#   Upload $BACKUP_FILE (and summary) to the rclone remote.
+# Description:
+#   Upload the archive, its checksum, and backup_summary.md to rclone remote,
+#   then prune remote old files.
+#
+# Behaviors:
+#   - If RCLONE_REMOTE is empty → sets UPLOAD_STATUS=SKIPPED and returns 0.
+#   - Uploads files via `rclone copyto` to remote root.
+#   - Sets UPLOAD_STATUS=SUCCESS on success; FAIL on any upload error.
+#   - Prunes remote files older than DAYS_TO_KEEP by filter (keeps recent ones).
+#
+# Returns:
+#   0 on full success; non-zero if upload failed (prune still attempted).
 ################################################################################
 upload_backup_rclone() {
     require_cmd rclone || { log ERROR "rclone is required for uploads"; return 1; }
@@ -469,12 +566,23 @@ upload_backup_rclone() {
 
 ################################################################################
 # send_mail_on_action()
-#   Sends a final notification email based on backup & upload results.
+# Description:
+#   Decide whether and what to email based on BACKUP_STATUS/UPLOAD_STATUS.
+#
+# Behaviors:
+#   - Composes subject/body per cases:
+#       * Local FAIL → always email (attach LOG_FILE).
+#       * Upload FAIL → always email.
+#       * SUCCESS/SKIPPED → email only if NOTIFY_ON_SUCCESS=true.
+#   - Calls send_email accordingly.
+#
+# Returns:
+#   0 if email not needed or sent successfully; non-zero if send fails.
 ################################################################################
 send_mail_on_action() {
     local subject body
 
-    # 1) Determine subject/body based on statuses:
+    #Determine subject/body based on statuses:
     if [[ "$BACKUP_STATUS" == "FAIL" ]]; then
         subject="$DATE: n8n Backup FAILED locally"
         body="An error occurred during the local backup step. See attached log.
@@ -521,7 +629,7 @@ Log File: $LOG_FILE"
   Log File: $LOG_FILE"
     fi
 
-    # 2) Decide whether to send email:
+    # Decide whether to send email:
     #
     # - On any failure (backup or upload), always send (with log attachment).
     # - On success, only send if the user passed --notify-on-success.
@@ -546,7 +654,24 @@ Log File: $LOG_FILE"
 
 ################################################################################
 # print_backup_summary()
-#   Print a human-readable summary of what just happened.
+# Description:
+#   Print a human-readable, aligned one-shot summary of the latest action
+#   (backup/restore) to the console.
+#
+# Behaviors:
+#   - Derives the email outcome line:
+#       * EMAIL_EXPLICIT=false  → "SKIPPED (not requested)"
+#       * EMAIL_SENT=true       → "SUCCESS"
+#       * Missing SMTP config   → "ERROR (missing SMTP config)"
+#       * Otherwise             → "FAILED (send failed)"
+#   - Renders a status box via box_line() for:
+#       Action, Status, Timestamp, Domain, Backup file (if any),
+#       N8N Version, Log File, Daily tracking (backup_summary.md),
+#       Google Drive upload (SUCCESS/SKIPPED/FAILED) and Folder link (if SUCCESS),
+#       Email notification (derived as above).
+#
+# Returns:
+#   0 always.
 ################################################################################
 print_backup_summary() {
 	local summary_file="$BACKUP_DIR/backup_summary.md"
@@ -602,7 +727,17 @@ print_backup_summary() {
 
 ################################################################################
 # backup_n8n()
-#   Main backup workflow: health check, dump volumes & DB, archive, sync, notify
+# Description:
+#   Orchestrate a full backup: change check → local backup → upload → notify/print.
+#
+# Behaviors:
+#   - If no changes and not forced → marks SKIPPED, writes summary, optional email.
+#   - Runs do_local_backup(); on success refreshes snapshot and writes summary.
+#   - If remote configured, uploads and prunes; captures DRIVE_LINK.
+#   - Sends final email per policy and prints the summary box.
+#
+# Returns:
+#   0 on success (including SKIPPED); 1 if local backup failed.
 ################################################################################
 backup_n8n() {
     N8N_VERSION="$(get_current_n8n_version)"
@@ -661,8 +796,18 @@ backup_n8n() {
 
 ################################################################################
 # fetch_restore_archive_if_remote()
-# If TARGET_RESTORE_FILE is an rclone remote (contains ":" and not a local path),
-# copy it locally and set TARGET_RESTORE_FILE to the fetched local file.
+# Description:
+#   If TARGET_RESTORE_FILE points to an rclone remote, download it locally
+#   and verify checksum when available.
+#
+# Behaviors:
+#   - No-op if TARGET_RESTORE_FILE already exists locally.
+#   - For "remote:path/file": downloads to BACKUP_DIR/_restore_tmp/<sanitized_name>.
+#   - Attempts to fetch .sha256 and verify via sha256sum -c.
+#   - Rewrites TARGET_RESTORE_FILE to the local path on success.
+#
+# Returns:
+#   0 on success; non-zero on download/verification failure.
 ################################################################################
 fetch_restore_archive_if_remote() {
     # Already a real local file? nothing to do.
@@ -706,8 +851,25 @@ fetch_restore_archive_if_remote() {
 
 ################################################################################
 # restore_n8n()
-#   Restores Docker volumes, config, and DB from a backup archive.
-#   Returns 0 on success, non-zero on failure.
+# Description:
+#   Restore the n8n stack from a backup archive (configs, volumes, database).
+#
+# Behaviors:
+#   - Fetches remote archive if needed; extracts to temp dir.
+#   - Validates .env.bak (with N8N_ENCRYPTION_KEY) and docker-compose.yml.bak,
+#     then restores them to N8N_DIR and reloads env.
+#   - Stops stack (compose down --volumes --remove-orphans).
+#   - If DB dump (*.dump or *.sql) present → skip postgres-data volume restore.
+#   - Recreates and restores non-DB volumes from their tarballs.
+#   - Starts postgres, waits healthy, then:
+#       * For .dump → drop/create DB and pg_restore -c -v.
+#       * For .sql  → drop/create DB and psql < file.
+#       * If none   → assume DB came from restored volume.
+#   - Starts remaining services (compose up -d), health-checks stack.
+#   - Cleans temp files and prints aligned summary.
+#
+# Returns:
+#   0 on success; non-zero on any failure.
 ################################################################################
 restore_n8n() {
 	local requested_spec="$TARGET_RESTORE_FILE"
