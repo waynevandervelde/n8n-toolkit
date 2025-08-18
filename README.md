@@ -1,57 +1,31 @@
 # Self-Hosted n8n — Install, Upgrade, and Backup/Restore
 
 Automate the **install**, **upgrade**, **backup**, and **restore** of an [n8n](https://n8n.io/) stack running on Docker.  
-This repo contains two primary scripts:
-
-- `n8n_manager.sh` – zero-touch **install/upgrade/cleanup** with Traefik & TLS
-- `n8n_backup_restore.sh` – safe, **change-aware backups** + optional Google Drive sync & email alerts
-
-> For friendly, step-by-step docs, see:
-> - **Manager guide:** [`n8n_manager_user_guide.md`](./n8n_manager_user_guide.md)
-> - **Backup/restore guide:** [`n8n_Backup_Restore_User_Guide.md`](./n8n_Backup_Restore_User_Guide.md)
-> - **Google Drive setup:** [`Rclone_Google_Drive_Setup_Guide.md`](./Rclone_Google_Drive_Setup_Guide.md)
-
----
+This repository provides a **production-ready setup** for **self-hosting n8n** with **Docker Compose**, **Traefik** (for HTTPS & reverse proxy), and **PostgreSQL** (for reliable persistence).  
+Whether you’re a developer or a non-technical user, this setup makes it simple to run your own secure automation platform.
 
 ## Table of Contents
 
-- [Overview](#overview)
-- [Repository Layout](#repository-layout)
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Install n8n (Manager Script)](#install-n8n-manager-script)
-- [Upgrade / Pin a Version](#upgrade--pin-a-version)
-- [Cleanup / Uninstall](#cleanup--uninstall)
-- [Backups](#backups)
-- [Restore](#restore)
-- [Scheduling Daily Backups](#scheduling-daily-backups)
-- [Email and Google Drive Setup](#email-and-google-drive-setup)
-- [Troubleshooting](#troubleshooting)
-- [Security Notes](#security-notes)
+- [Highlights](#highlights)  
+- [Repository Layout](#repository-layout)  
+- [Prerequisites](#prerequisites)  
+- [Quick Start](#quick-start)  
+- [Install n8n (Manager Script)](#install-n8n-manager-script)  
+- [Backup and restore](#backups-and-restore)  
 - [Support](#support)
 
 ---
 
-## Overview
+## Highlights
 
-This repo contains two production-ready bash scripts:
-
-1. **`n8n_manager.sh`** — installs, upgrades, and manages an n8n stack using Docker Compose.
-   - Validates your **domain DNS** points to the server
-   - Installs **Docker Engine** & **Docker Compose v2** (if needed)
-   - Creates persistent volumes: `n8n-data`, `postgres-data`, `letsencrypt`
-   - Runs health checks and validates HTTPS/SSL
-   - Supports **version pinning** (`-v`) and **non-interactive SSL email** (`-m`)
-   - Force redeploy / allow downgrade with `-f`
-   - Full cleanup mode
-
-2. **`n8n_backup_restore.sh`** — safely backs up & restores your stack.
-   - Archives **volumes** and **Postgres dump**
-   - Saves `.env` & `docker-compose.yml`
-   - **Change detection** (skips redundant backups unless `--force`)
-   - **30‑day rolling summary** (`backups/backup_summary.md`)
-   - Optional **Google Drive upload** via `rclone`
-   - Optional **email notifications** via Gmail/`msmtp` (attaches logs on failure)
+- **Automated lifecycle** — scripts to install, upgrade, backup, and restore your n8n stack.  
+- **Single-mode deployment** — run editor, webhooks, and workflow execution in one simple container.  
+- **Secure by default** — HTTPS with Traefik + Let’s Encrypt (auto-renew), strong encryption, and Basic Auth protection.  
+- **Reliable data storage** — PostgreSQL database for workflows & credentials, with persistent volumes for durability.  
+- **Persistent by design** — database, n8n data, and SSL certificates survive restarts and upgrades.  
+- **User-friendly for all** — clear instructions so developers and non-technical users can both succeed.  
+- **Stable & monitored** — built-in health checks for all containers.  
+- **Production-ready** — secure configs, environment variables, and best practices already applied.  
 
 ---
 
@@ -59,240 +33,188 @@ This repo contains two production-ready bash scripts:
 
 ```
 .
-├── n8n_manager.sh                      # Install / Upgrade / Cleanup
-├── n8n_backup_restore.sh               # Backup / Restore + Google Drive + Email
-├── docker-compose.yml                  # Template Compose file (n8n + Postgres + Traefik stack)
-├── .env                                # Template env (used by docker-compose)
-├── logs/                               # Created on first run
-└── backups/                            # Created by backup script (archives, summary, snapshot/)
-├── setup_rclone.sh                     # Helper to bootstrap rclone (optional)
-├── n8n_manager_user_guide.md           # User guide for n8n installation, upgrade, cleanup
-├── n8n_Backup_Restore_User_Guide.md    # User guide for n8n backup, restore
-├── Rclone_Google_Drive_Setup_Guide.md  # Google Drive how-to setup for rclone
+├── n8n_manager.sh                       # Script: Install / Upgrade / Cleanup the stack
+├── n8n_backup_restore.sh                # Script: Backup / Restore + Google Drive + Email support
+├── docker-compose.yml                   # Main Compose file (defines n8n + Postgres + Traefik stack)
+├── .env                                 # Environment configuration (domain, credentials, DB, SSL, etc.)
+├── n8n_manager_user_guide.md            # User guide for install, upgrade, cleanup
+├── n8n_Backup_Restore_User_Guide.md     # User guide for backup and restore
 └── README.md
 ```
 
-> Keep `docker-compose.yml` and `.env` in the **same folder** where you run the scripts.
-
+> Key Files
+- **`docker-compose.yml`**: Defines the entire stack: n8n, PostgreSQL, Traefik. This is the *engine* of your deployment.  
+- **`.env`**: Central configuration file. Here you set your domain, SSL email, database credentials, and more.  
+  - **⚠️ N8N_ENCRYPTION_KEY is critical**:  
+    - Used to encrypt all saved credentials in n8n.  
+    - Must be set during **installation** and kept the same across **upgrades, backups, and restores**.  
+    - If you lose or change it, all previously stored credentials become unusable, even if you restore from a backup.  
 ---
 
 ## Prerequisites
 
-- **Domain / subdomain** (e.g. `n8n.example.com`) pointing to **this server’s public IP**
-- **Ports 80 & 443 open** on your firewall/cloud provider
-- Ubuntu/Debian server (root or sudo)
-- Internet access (to pull Docker images and packages)
-
-> The manager script installs required packages automatically (Docker, Compose, jq, etc.).
+- **Domain / subdomain** (e.g. `n8n.example.com`) pointing to **this server’s public IP**  
+- **Ports 80 & 443 open** on your firewall/cloud provider  
+- **Ubuntu/Debian server** (with root or sudo access)  
+- **Internet access** (to pull Docker images and packages)  
+- **Recommended server resources**:  
+  - Minimum: **1 vCPU, 2 GB RAM, 20 GB disk** (good for testing or light workloads)  
+  - Recommended: **2 vCPU, 4 GB RAM, 40+ GB disk** (stable for production use)  
+  - Scale up if you expect **many concurrent workflows** or large data processing  
 
 ---
 
 ## Quick Start
 
-Clone and make scripts executable:
+### 1. Get the Repository
+
+You can set up this project in **two different ways**, depending on your experience:
+
+#### Option 1 — For developers (using Git)
+If you already have `git` installed and are comfortable with it:
 
 ```bash
 git clone https://github.com/thenguyenvn90/n8n.git
 cd n8n
-chmod +x n8n_manager.sh n8n_backup_restore.sh
+chmod +x *.sh
 ```
 
-**Install (interactive email prompt):**
+#### Option 2 — For non-tech users (download as ZIP)
+If you don’t use Git, you can just download the code directly:
 
 ```bash
-sudo ./n8n_manager.sh -i n8n.example.com
+# Install unzip if not available
+sudo apt install unzip -y
+
+# Download and extract
+curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip
+unzip n8n.zip
+cd n8n-main
+# Make scripts executable
+chmod +x *.sh
 ```
-
-**Install (non‑interactive email):**
-
-```bash
-sudo ./n8n_manager.sh -i n8n.example.com -m you@example.com
-```
-
-After a successful install, visit: `https://n8n.example.com`
+Note: After unzipping, GitHub appends -main to the folder name. Instead of n8n/, the folder will be called n8n-main/.
 
 ---
 
-## Install n8n (Manager Script)
+### 2. Install n8n (Manager Script)
+
+The `n8n_manager.sh` script is the main tool to **install, upgrade, and cleanup** your n8n stack.  
+It automates the entire lifecycle of the deployment so you don’t need to remember long Docker commands.
 
 **Basic syntax**
 ```bash
-sudo ./n8n_manager.sh -i <DOMAIN> [-m <SSL_EMAIL>] [-d <DIR>] [-l <LEVEL>]
+   Usage: ./n8n_manager.sh [OPTIONS]
+   
+   Options:
+     -a, --available
+           List available n8n versions
+           * If n8n is running → show all newer versions than current
+           * If n8n is not running → show top 5 latest versions
+   
+     -i, --install <DOMAIN>
+           Install n8n stack with specified domain
+           Use -v|--version to specify a version
+   
+     -u, --upgrade <DOMAIN>
+           Upgrade n8n stack with specified domain
+           Use -f|--force to force upgrade/downgrade
+           Use -v|--version to specify a version
+   
+     -v, --version <N8N_VERSION>
+           Install/upgrade with a specific n8n version. If omitted/empty, uses latest-stable
+   
+     -m, --email <SSL_EMAIL>
+           Email address for Let's Encrypt SSL certificate
+   
+     -c, --cleanup
+           Cleanup all containers, volumes, and network
+   
+     -d, --dir <TARGET_DIR>
+           /path/to/n8n: your n8n project directory (default: /home/n8n)
+   
+     -l, --log-level <LEVEL>
+           Set log level: DEBUG, INFO (default), WARN, ERROR
+   
+     -h, --help
+           Show script usage
 ```
 
-**Examples**
-```bash
-# Install to current directory, prompt for email
-sudo ./n8n_manager.sh -i n8n.example.com
-
-# Install to /opt/n8n and provide email non-interactively
-sudo ./n8n_manager.sh -i n8n.example.com -m you@example.com -d /opt/n8n
-```
+**Key Features**
+- **Install** — set up n8n with Docker Compose, Traefik, and PostgreSQL in one command.  
+- **Upgrade** — update n8n to the latest (or specific) version while keeping data safe.  
+- **Cleanup** — remove unused containers, images, and volumes.  
+- **Logs** — view container logs for debugging.  
+- **Secure defaults** — auto-configures HTTPS, Basic Auth, and persistence.  
 
 **What it does**
-1. Confirms your domain resolves to this server’s public IP.
-2. Installs Docker Engine & Compose v2 (if needed).
-3. Copies/updates `docker-compose.yml` and `.env`.
-4. Injects `DOMAIN`, `SSL_EMAIL`, and a strong password.
-5. Resolves an **n8n image tag** (see versioning below) and writes it as `N8N_IMAGE_TAG` in `.env`.
-6. Starts the stack and waits for healthy containers and valid TLS.
+1. Confirms your domain resolves to this server’s public IP.  
+2. Installs Docker Engine & Compose v2 (if needed).  
+3. Copies/updates `docker-compose.yml` and `.env`.  
+4. Injects key variables:  
+   - `DOMAIN`  
+   - `SSL_EMAIL`  
+   - `N8N_ENCRYPTION_KEY` (critical for encrypted credentials)  
+   - `N8N_IMAGE_TAG` (version to deploy)  
+   - `STRONG_PASSWORD` (used for n8n & PostgreSQL).  
+5. Deploys the n8n stack using Docker Compose and sets up SSL certificates.  
+6. Runs health checks and validates HTTPS/SSL status.  
+7. Supports **force redeploy** or even **downgrade** with the `-f` flag.  
+8. Provides **full cleanup mode** to remove all containers, images, and volumes if needed.  
 
-**Key flags**
-- `-i <DOMAIN>` — required for install
-- `-m <EMAIL>` — provide SSL email non‑interactively (skips prompt)
-- `-d <DIR>` — target install directory (default: current directory)
-- `-l <LEVEL>` — log level: `DEBUG`, `INFO` (default), `WARN`, `ERROR`
-
----
-
-## Upgrade / Pin a Version
-
-**Latest stable (auto‑resolved):**
-```bash
-sudo ./n8n_manager.sh -u n8n.example.com
-```
-
-**Pin to a specific version (e.g. 1.106.3):**
-```bash
-sudo ./n8n_manager.sh -u n8n.example.com -v 1.106.3
-```
-
-**Force redeploy or allow downgrade:**
-```bash
-sudo ./n8n_manager.sh -u n8n.example.com -v 1.105.3 -f
-```
-
-**How version selection works**
-- If you **omit `-v`** or pass `-v latest`, the script resolves the latest **stable** n8n tag from Docker Hub and sets `N8N_IMAGE_TAG` in `.env`.
-- If you **pass `-v X.Y.Z`**, the script validates that tag and pins it in `.env`.
-- A future `-u` **without `-v`** switches back to the latest stable.
-- Downgrades require `-f`.
+👉 For detailed usage (all flags, examples, and advanced scenarios), see the full guide: [**n8n_manager_user_guide.md**](./n8n_manager_user_guide.md)
 
 ---
 
-## Cleanup / Uninstall
+### 3. Backup and restore
 
+The `n8n_backup_restore.sh` script handles **backups and restores** of your n8n stack, including volumes, database, configs, and optional cloud storage.
+
+**Basic syntax**
 ```bash
-sudo ./n8n_manager.sh -c
-```
-Stops/removes containers, prunes images, and deletes the `n8n-data`, `postgres-data`, and `letsencrypt` volumes and the `n8n_network` (if present). You’ll be prompted for confirmation.
+   Usage: ./n8n_backup_restore.sh [OPTIONS]
 
----
-
-## Backups
-
-**Normal backup (skips if no changes):**
-```bash
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups
-```
-
-**Force backup:**
-```bash
-./n8n_backup_restore.sh -b -f -e you@gmail.com -s gdrive-user -t n8n-backups
-```
-
-**What’s backed up**
-- Volumes: `n8n-data`, `postgres-data`, `letsencrypt`
-- Postgres dump from the `postgres` container (DB `n8n`)
-- `.env` and `docker-compose.yml` copies
-- A rolling `backups/backup_summary.md` (30 days)
-
-**Outputs**
-- Archive: `backups/n8n_backup_<N8N_VERSION>_<YYYY-MM-DD_HH-MM-SS>.tar.gz`
-- Log: `logs/backup_n8n_<timestamp>.log`
-
-**Change detection**
-The script compares live data to a `backups/snapshot/` mirror and **skips** creating a new archive if nothing changed (unless `-f`).
-
----
-
-## Restore
-
-> ⚠️ Restore **stops the stack and replaces volumes** with the archive contents.
-
-```bash
-./n8n_backup_restore.sh -r backups/n8n_backup_1.106.3_2025-08-10_15-31-58.tar.gz
+   Options:
+     -b, --backup
+           Perform backup
+   
+     -f, --force
+           Force backup even if no changes detected
+   
+     -r, --restore <FILE>
+           Restore from backup file
+   
+     -d, --dir <DIR>
+           /path/to/n8n project directory (default: /home/n8n)
+   
+     -m, --email <EMAIL>
+           Send email alerts to this address
+   
+     -s, --remote-name <NAME>
+           Rclone remote name (e.g. gdrive-user)
+   
+     -n, --notify-on-success
+           Email on successful completion
+   
+     -l, --log-level <LEVEL>
+           Set log level: DEBUG, INFO (default), WARN, ERROR
+   
+     -h, --help
+           Show script usage
 ```
 
-What it does:
-- `docker compose down --volumes --remove-orphans`
-- Removes `n8n-data`, `postgres-data`, `letsencrypt`
-- Restores volumes + `.env` / `docker-compose.yml` (if present)
-- Brings the stack up
-- If a SQL dump is included, it drops & recreates the **`n8ndb`** database and restores into it
+**Key Features**
+- **Checks N8N_ENCRYPTION_KEY** — ensures it is set before any backup (required for credential security).
+- **Backs up Docker volumes**: `n8n-data`, `postgres-data`, `letsencrypt`  
+- **Creates a PostgreSQL dump** (from the `postgres` container, DB `n8n`)  
+- **Copies configs** (`.env`, `docker-compose.yml`) into the backup  
+- **Smart change detection** — skips backup if nothing has changed (unless forced with `-f`)  
+- **Keeps 30-day rolling summary** in `backups/backup_summary.md`  
+- **Optional Google Drive upload** (via `rclone`)  
+- **Email alerts** via Gmail SMTP (`msmtp`) with log file attached (on failure, or optionally on success)
+- **Restore** from a backup archive stored **locally** or from **Google Drive** (via rclone).  
 
-> Ensure your `.env` DB name aligns with the restored DB (script restores to `n8ndb`).
-
----
-
-## Scheduling Daily Backups
-
-Use **cron** (example: run at 2:00 AM daily):
-
-```bash
-crontab -e
-```
-
-Add:
-```cron
-0 2 * * * cd /path/to/n8n && \
-SMTP_USER="you@gmail.com" SMTP_PASS="app_password" \
-./n8n_backup_restore.sh -b -e you@gmail.com -s gdrive-user -t n8n-backups >> logs/cron.log 2>&1
-```
-
----
-
-## Email and Google Drive Setup
-
-### Email via Gmail (`msmtp`)
-Export once per session (or inline in cron):
-```bash
-export SMTP_USER="youraddress@gmail.com"
-export SMTP_PASS="your_gmail_app_password"
-```
-- Use a **Gmail App Password** (Google Account → Security → App passwords).
-
-Add `-e you@example.com` to receive notifications. On failures, the log file is attached.
-
-### Google Drive via `rclone`
-1. Run `rclone config` and create a remote (e.g., `gdrive-user`).
-2. Use `-s gdrive-user` (remote) and `-t n8n-backups` (folder path).  
-   Test with `rclone lsd gdrive-user:`.
-
-Old remote files older than **7 days** are pruned automatically.
-
----
-
-## Troubleshooting
-
-- **“Not: command not found” when running a script**  
-  You likely downloaded a web page instead of the raw script. Ensure you cloned the repo or fetched the **raw** file.
-
-- **DNS check fails**  
-  `dig +short n8n.example.com` must show your server’s public IP (`curl -s https://api.ipify.org`). Update your DNS A record if needed.
-
-- **Port 80/443 already in use**  
-  Stop other web servers (Apache/Nginx) or change their ports before install.
-
-- **SSL not issued**  
-  Ports 80/443 must be open, domain must resolve correctly, and Traefik must be running.
-
-- **Backups run every time**  
-  First run bootstraps the snapshot. Subsequent runs skip if no changes are detected (unless `-f`).
-
-- **Email didn’t send**  
-  Use a Gmail **App Password** and ensure `SMTP_USER/SMTP_PASS` are set in the same shell/cron line.
-
-- **Google Drive uploaded to wrong folder**  
-  Double‑check `-s` (remote name) and `-t` (remote path). Verify with `rclone lsd`.
-
----
-
-## Security Notes
-
-- Backup archives include your **database dump** and secrets from `.env`. Treat them as **sensitive**.
-- Limit access to the server and protect the `backups/` and `logs/` directories.
-- Test **restore** at least once to ensure everything matches your environment.
+👉 For detailed usage (all flags, examples, and advanced scenarios), see the full guide: [`n8n_Backup_Restore_User_Guide.md`](./n8n_Backup_Restore_User_Guide.md)
 
 ---
 
@@ -301,4 +223,4 @@ Old remote files older than **7 days** are pruned automatically.
 - Open an issue in the repo, or  
 - Email **thenguyen.ai.automation@gmail.com**
 
-Happy automating! 🚀
+Happy automating!
