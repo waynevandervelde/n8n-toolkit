@@ -10,8 +10,8 @@ Whether you’re a developer or a non-technical user, this setup makes it simple
 - [Repository Layout](#repository-layout)  
 - [Prerequisites](#prerequisites)  
 - [Quick Start](#quick-start)  
-- [Install n8n](#install-n8n-manager-script)  
-- [Backup and restore n8n](#backup-and-restore)  
+- [Install n8n](#install-n8n)  
+- [Backup and restore n8n](#backup-and-restore-n8n)  
 - [Support](#support)
 
 ---
