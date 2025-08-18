@@ -332,7 +332,22 @@ PostgreSQL:           Restored from SQL dump
 - Restore from a Google Drive remote path (via rclone):
 
 ```bash
-./n8n_backup_restore.sh -r gdrive-user:n8n-backups/n8n_backup_1.107.2_2025-08-16_09-01-00.tar.gz
+./n8n_backup_restore.sh -r gdrive-user:n8n_backup_1.107.2_2025-08-18_01-10-30.tar.gz
+```
+Example logs:
+```bash
+═════════════════════════════════════════════════════════════
+Restore completed successfully.
+Domain:               https://n8n-test.nguyenminhthe.com
+Restore from file:    gdrive-user:n8n_backup_1.107.2_2025-08-18_01-10-30.tar.gz
+Local archive used:   /home/n8n/backups/_restore_tmp/gdrive-user_n8n_backup_1.107.2_2025-08-18_01-10-30.tar.gz
+N8N Version:          1.107.2
+N8N Directory:        /home/n8n
+Log File:             /home/n8n/logs/restore_n8n_2025-08-18_01-12-49.log
+Timestamp:            2025-08-18_01-12-49
+Volumes restored:     n8n-data, letsencrypt
+PostgreSQL:           Restored from SQL dump
+═════════════════════════════════════════════════════════════
 ```
 ---
 
