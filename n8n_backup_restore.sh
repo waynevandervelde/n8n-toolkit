@@ -45,7 +45,6 @@ NOTIFY_ON_SUCCESS=false
 SMTP_USER="${SMTP_USER:-}"
 SMTP_PASS="${SMTP_PASS:-}"
 RCLONE_REMOTE=""
-RCLONE_TARGET=""
 EMAIL_TO=""
 EMAIL_EXPLICIT=false # set true only if -e/--email is passed
 EMAIL_SENT=false # becomes true only after a successful send
@@ -176,7 +175,6 @@ Usage: $0 [OPTIONS]
   -l, --log-level <LEVEL>    DEBUG, INFO (default), WARN, ERROR
   -e, --email <EMAIL>        Send email alerts to this address
   -s, --remote-name <NAME>   Rclone remote name (e.g. gdrive-user)
-  -t, --remote-target <PATH> Rclone target path (e.g. n8n-backups)
   -n, --notify-on-success    Email on successful completion
   -h, --help                 Show this help message
 EOF
@@ -196,8 +194,8 @@ initialize_snapshot() {
                   "$BACKUP_DIR/snapshot/volumes/$vol/"
         done
         mkdir -p "$BACKUP_DIR/snapshot/config"
-        rsync -a "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
-        rsync -a "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
+		[[ -f "$N8N_DIR/.env" ]] && rsync -a "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
+		[[ -f "$N8N_DIR/docker-compose.yml" ]] && rsync -a "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
         log INFO "Snapshot bootstrapped."
     fi
 }
@@ -207,7 +205,7 @@ initialize_snapshot() {
 #   After a successful backup, mirror live volumes & config into snapshot/
 ################################################################################
 refresh_snapshot() {
-  log INFO "Updating snapshot to current state…"
+  log INFO "Updating snapshot to current state"
   for vol in "${VOLUMES[@]}"; do
     rsync -a --delete \
       --exclude='pg_wal/**' \
@@ -272,21 +270,21 @@ is_system_changed() {
 
 ################################################################################
 # get_google_drive_link()
-#   If RCLONE_REMOTE and RCLONE_TARGET are set, reads root_folder_id
+#   If RCLONE_REMOTE is set, reads root_folder_id
 #   from rclone.conf and echoes the Drive folder URL.
 #   Otherwise echoes an empty string.
 ################################################################################
 get_google_drive_link() {
     # If no remote or no target, output nothing
-    if [[ -z "$RCLONE_REMOTE" || -z "$RCLONE_TARGET" ]]; then
+    if [[ -z "$RCLONE_REMOTE" ]]; then
         echo ""
         return
     fi
 
     # Read the root_folder_id from rclone config
     local folder_id
-    folder_id=$(rclone config show "$RCLONE_REMOTE" 2>/dev/null \
-                | awk -F '=' '/^root_folder_id/ { gsub(/ /,"",$2); print $2 }')
+	folder_id=$(rclone config show "$RCLONE_REMOTE" 2>/dev/null \
+            | awk -F '=' '$1 ~ /root_folder_id/ { gsub(/[[:space:]]/, "", $2); print $2 }')
 
     if [[ -n "$folder_id" ]]; then
         echo "https://drive.google.com/drive/folders/$folder_id"
@@ -336,7 +334,10 @@ EOF
 #   $BACKUP_FILE and returns 0; on any error returns 1.
 ################################################################################
 do_local_backup() {
-    local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
+    # Make sure encryption key exists BEFORE taking backup
+	ensure_encryption_key_exists "$N8N_DIR/.env" || { BACKUP_STATUS="FAIL"; return 1; }
+
+	local BACKUP_PATH="$BACKUP_DIR/backup_$DATE"
     mkdir -p "$BACKUP_PATH" || { log ERROR "Failed to create $BACKUP_PATH"; return 1; }
 
  	log INFO "Checking services running and healthy before starting backup..."
@@ -397,25 +398,27 @@ do_local_backup() {
 ################################################################################
 # upload_backup_rclone()
 #   Upload $BACKUP_FILE (and summary) to the rclone remote.
-#   Sets UPLOAD_STATUS="SUCCESS", "FAIL" or "SKIPPED".
-#   Returns 0 if SKIPPED or SUCCESS, 1 if FAIL.
 ################################################################################
 upload_backup_rclone() {
-	local ret=0
-    # nothing to do if no remote configured
-    if [[ -z "$RCLONE_REMOTE" || -z "$RCLONE_TARGET" ]]; then
+    require_cmd rclone || { log ERROR "rclone is required for uploads"; return 1; }
+    local ret=0
+
+    if [[ -z "${RCLONE_REMOTE:-}" ]]; then
         UPLOAD_STATUS="SKIPPED"
-        log INFO "Rclone remote or target not set; skipping upload."
+        log INFO "Rclone remote not set; skipping upload."
         return 0
     fi
 
-    log INFO "Uploading $BACKUP_FILE to $RCLONE_REMOTE:$RCLONE_TARGET"
+    # Normalize remote (force one colon)
+    local REMOTE="${RCLONE_REMOTE%:}:"
+
+    log INFO "Uploading backup files directly to remote root ($REMOTE)"
     if \
-         rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$RCLONE_REMOTE:$RCLONE_TARGET" && \
-         rclone copy "$BACKUP_DIR/backup_summary.md" "$RCLONE_REMOTE:$RCLONE_TARGET"
+        rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$REMOTE" && \
+        rclone copy "$BACKUP_DIR/backup_summary.md" "$REMOTE"
     then
         UPLOAD_STATUS="SUCCESS"
-        log INFO "Uploaded both $BACKUP_FILE and backup_summary.md successfully!"
+        log INFO "Uploaded '$BACKUP_FILE' and 'backup_summary.md' successfully."
         ret=0
     else
         UPLOAD_STATUS="FAIL"
@@ -423,12 +426,14 @@ upload_backup_rclone() {
         ret=1
     fi
 
-    # Safer remote prune: only delete our *.tar.gz files older than retention
-    log INFO "Pruning remote archives older than $DAYS_TO_KEEP days (limited to our backup patterns)"
-    rclone delete --min-age "${DAYS_TO_KEEP}d" \
-        --include "n8n_backup_*.tar.gz" \
-        --exclude "backup_summary.md" \
-        "$RCLONE_REMOTE:$RCLONE_TARGET" || log WARN "Remote prune returned non-zero (continuing)"
+    # Safer remote prune (only tarballs we created)
+    log INFO "Pruning remote archives older than ${DAYS_TO_KEEP:-7} days (pattern: n8n_backup_*.tar.gz)"
+    local tmpfilter; tmpfilter="$(mktemp)"
+    printf "%s\n" "+ n8n_backup_*.tar.gz" "- *" > "$tmpfilter"
+    rclone delete "$REMOTE" --min-age "${DAYS_TO_KEEP:-7}d" --filter-from "$tmpfilter" --rmdirs \
+        || log WARN "Remote prune returned non-zero (continuing)."
+    rm -f "$tmpfilter"
+
     return $ret
 }
 
@@ -460,7 +465,7 @@ Log File: $LOG_FILE"
 
 File: $BACKUP_FILE
 
-But the upload to $RCLONE_REMOTE:$RCLONE_TARGET failed.
+But the upload to $RCLONE_REMOTE failed.
 See log for details:
 
 Log File: $LOG_FILE"
@@ -470,7 +475,7 @@ Log File: $LOG_FILE"
         body="Backup and upload completed successfully.
 
   File: $BACKUP_FILE
-  Remote: $RCLONE_REMOTE:$RCLONE_TARGET
+  Remote: $RCLONE_REMOTE
   Drive Link: ${DRIVE_LINK:-N/A}"
 
     elif [[ "$BACKUP_STATUS" == "SUCCESS" && "$UPLOAD_STATUS" == "SKIPPED" ]]; then
@@ -677,8 +682,7 @@ fetch_restore_archive_if_remote() {
 #   Returns 0 on success, non-zero on failure.
 ################################################################################
 restore_n8n() {
-    load_env_file
-    local requested_spec="$TARGET_RESTORE_FILE"
+	local requested_spec="$TARGET_RESTORE_FILE"
 
     # If it's a remote like "gdrive-user:n8n-backups/xxx.tar.gz", fetch it locally
     fetch_restore_archive_if_remote || { log ERROR "Failed to fetch remote restore archive."; return 1; }
@@ -697,23 +701,50 @@ restore_n8n() {
 	tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir" \
         || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
 
-    # Restore .env and docker-compose.yml if present
-    if [[ -f "$restore_dir/.env.bak" ]]; then
-        cp -f "$restore_dir/.env.bak" "$N8N_DIR/.env"
-        log INFO "Restored .env file to $N8N_DIR/.env"
+	#require .env.bak & compose from backup, and enforce key presence ----
+	local backup_env_path="$restore_dir/.env.bak"
+	local current_env_path="$N8N_DIR/.env"
+ 	local backup_compose_path="$restore_dir/docker-compose.yml.bak"
+	local current_compose_path="$N8N_DIR/docker-compose.yml"
+ 
+	if [[ ! -f "$backup_env_path" ]]; then
+		log ERROR "Not found $backup_env_path. Aborting restore."
+        return 1
     fi
 
-    if [[ -f "$restore_dir/docker-compose.yml.bak" ]]; then
-        cp -f "$restore_dir/docker-compose.yml.bak" "$N8N_DIR/docker-compose.yml"
-        log INFO "Restored docker-compose.yml to $N8N_DIR/docker-compose.yml"
+	if [[ ! -f "$backup_compose_path" ]]; then
+        log ERROR "Not found $backup_compose_path. Aborting restore."
+        return 1
     fi
 
-	# Stop and remove the current containers before cleaning volumes
+ 	# Verify N8N_ENCRYPTION_KEY is present in backup .env
+  	local n8n_encryption_key
+    n8n_encryption_key="$(read_env_var "$backup_env_path" N8N_ENCRYPTION_KEY || true)"
+    if [[ -z "$n8n_encryption_key" ]]; then
+        log ERROR "$backup_env_path has no N8N_ENCRYPTION_KEY. Aborting restore."
+        return 1
+    fi
+
+    if ! looks_like_b64 "$n8n_encryption_key"; then
+        log WARN "N8N_ENCRYPTION_KEY in $backup_env_path doesn't look base64. Decryption may fail."
+    fi
+    log INFO "N8N_ENCRYPTION_KEY (masked): $(mask_secret "$n8n_encryption_key")"
+
+	# Restore .env and docker-compose.yml
+ 	cp -f "$backup_env_path" "$current_env_path"
+  	log INFO "Restored $backup_env_path to $current_env_path"
+  	cp -f "$backup_compose_path" "$current_compose_path"
+   	log INFO "Restored $backup_compose_path to $current_compose_path"
+
+	# Reload restored .env so later steps (DOMAIN, etc.) reflect the restored config
+	load_env_file "$current_env_path"	
+
+  	# Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
 	compose down --volumes --remove-orphans \
       || { log ERROR "docker-compose down failed"; return 1; }
 
-   	# Check if we have a SQL database	
+	# Check if we have a SQL database
   	local sql_file
   	sql_file="$(find "$restore_dir" -name "n8n_postgres_dump_*.sql" -print -quit || true)"
 
@@ -838,7 +869,7 @@ restore_n8n() {
 }
 
 # === Argument Parsing (long & short) ===
-TEMP=$(getopt -o fbr:d:l:e:s:t:nh --long force,backup,restore:,dir:,log-level:,email:,remote-name:,remote-target:,notify-on-success,help -n "$0" -- "$@") || usage
+TEMP=$(getopt -o fbr:d:l:e:s:nh --long force,backup,restore:,dir:,log-level:,email:,remote-name:,notify-on-success,help -n "$0" -- "$@") || usage
 eval set -- "$TEMP"
 
 while true; do
@@ -874,10 +905,6 @@ while true; do
             RCLONE_REMOTE="$2"
             shift 2
             ;;
-        -t|--remote-target)
-            RCLONE_TARGET="$2"
-            shift 2
-            ;;
         -n|--notify-on-success)
             NOTIFY_ON_SUCCESS=true;
             shift
@@ -902,7 +929,7 @@ check_root || { log ERROR "Please run as root (needed to read Docker volumes).";
 # Initialize directories & logging
 DEFAULT_N8N_DIR="/home/n8n"
 mkdir -p "$DEFAULT_N8N_DIR"
-N8N_DIR="${TARGET_DIR:-$DEFAULT_N8N_DIR}"
+N8N_DIR="${N8N_DIR:-$DEFAULT_N8N_DIR}"
 
 ENV_FILE="$N8N_DIR/.env"
 COMPOSE_FILE="$N8N_DIR/docker-compose.yml"
@@ -930,7 +957,7 @@ require_cmd base64 || exit 1
 $EMAIL_EXPLICIT && require_cmd msmtp
 
 # Only require rclone if a remote is configured
-[[ -n "$RCLONE_REMOTE" && -n "$RCLONE_TARGET" ]] && require_cmd rclone
+[[ -n "$RCLONE_REMOTE" ]] && require_cmd rclone
 
 # Email config sanity checks
 if $EMAIL_EXPLICIT; then
