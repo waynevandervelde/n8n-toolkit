@@ -1,12 +1,6 @@
 # n8n Manager — User Guide
 
-| **Version** | 1.1.0 |
-|-------------|-------|
-| **Author**  | TheNguyen |
-| **Last Updated** | 2025-08-16 |
-
-
-Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgrading, and cleaning up the n8n automation platform using Docker Compose.
+Welcome to the **n8n Manager** script, your one‑stop tool for installing, upgrading, and cleaning up the n8n automation platform using Docker Compose, Traefik (for HTTPS & reverse proxy), and PostgreSQL (for reliable persistence).
 
 ---
 ## Table of Contents
