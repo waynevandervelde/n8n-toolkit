@@ -159,6 +159,7 @@ send_email() {
 	local pass_tmp
 	pass_tmp="$(mktemp)"
 	printf '%s' "$SMTP_PASS" > "$pass_tmp"
+ 	chmod 600 "$pass_tmp"
     } | msmtp \
         --host=smtp.gmail.com \
         --port=587 \
@@ -271,18 +272,19 @@ initialize_snapshot() {
 #   0 on success; non-zero on failure.
 ################################################################################
 refresh_snapshot() {
-  log INFO "Updating snapshot to current state"
-  for vol in "${VOLUMES[@]}"; do
-    rsync -a --delete \
-      --exclude='pg_wal/**' \
-      --exclude='pg_stat_tmp/**' \
-      --exclude='pg_logical/**' \
-      "/var/lib/docker/volumes/${vol}/_data/" \
-      "$BACKUP_DIR/snapshot/volumes/$vol/"
-  done
-  rsync -a --delete "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
-  rsync -a --delete "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
-  log INFO "Snapshot refreshed."
+	log INFO "Updating snapshot to current state"
+	for vol in "${VOLUMES[@]}"; do
+		rsync -a --delete \
+		  --exclude='pg_wal/**' \
+		  --exclude='pg_stat_tmp/**' \
+		  --exclude='pg_logical/**' \
+		  "/var/lib/docker/volumes/${vol}/_data/" \
+		  "$BACKUP_DIR/snapshot/volumes/$vol/"
+	done
+
+	[[ -f "$N8N_DIR/.env" ]] && rsync -a --delete "$N8N_DIR/.env" "$BACKUP_DIR/snapshot/config/"
+	[[ -f "$N8N_DIR/docker-compose.yml" ]] && rsync -a --delete "$N8N_DIR/docker-compose.yml" "$BACKUP_DIR/snapshot/config/"
+	log INFO "Snapshot refreshed."
 }
 
 ################################################################################
@@ -292,14 +294,15 @@ refresh_snapshot() {
 #
 # Behaviors:
 #   - For each volume: rsync dry-run with excludes (pg_wal, pg_stat_tmp, pg_logical).
-#   - For configs: rsync dry-run on .env and docker-compose.yml.
+#   - For configs: rsync dry-run on .env and docker-compose.yml (only if they exist).
+#   - Creates snapshot target dirs if missing.
 #   - If any file changes detected → considered "changed".
 #
 # Returns:
 #   0 if changed; 1 if no differences.
 ################################################################################
 is_system_changed() {
-    local src dest diffs file
+    local src dest diffs file vol
 
     # Check each named volume
     for vol in "${VOLUMES[@]}"; do
@@ -308,15 +311,15 @@ is_system_changed() {
         mkdir -p "$dest"
 
         # rsync dry-run listing (omit directory entries)
-		diffs=$(
-		  rsync -rtun \
-		    --exclude='pg_wal/**' \
-		    --exclude='pg_stat_tmp/**' \
-		    --exclude='pg_logical/**' \
-		    --out-format="%n" \
-		    "$src" "$dest" \
-		  | grep -v '/$'
-		) || true
+        diffs=$(
+            rsync -rtun \
+                --exclude='pg_wal/**' \
+                --exclude='pg_stat_tmp/**' \
+                --exclude='pg_logical/**' \
+                --out-format="%n" \
+                "$src" "$dest" \
+            | grep -v '/$'
+        ) || true
 
         if [[ -n "$diffs" ]]; then
             log INFO "Change detected in volume: $vol"
@@ -327,12 +330,20 @@ is_system_changed() {
 
     # Check config files
     dest="$BACKUP_DIR/snapshot/config/"
+    mkdir -p "$dest"
     for file in .env docker-compose.yml; do
-        diffs=$(rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest" | grep -v '/$') || true
-        if [[ -n "$diffs" ]]; then
-            log INFO "Change detected in config: $file"
-            log DEBUG "  $diffs"
-            return 0
+        if [[ -f "$N8N_DIR/$file" ]]; then
+            diffs=$(
+                rsync -rtun --out-format="%n" "$N8N_DIR/$file" "$dest" \
+                | grep -v '/$'
+            ) || true
+            if [[ -n "$diffs" ]]; then
+                log INFO "Change detected in config: $file"
+                log DEBUG "  $diffs"
+                return 0
+            fi
+        else
+            log DEBUG "Config not present (skip diff): $file"
         fi
     done
 
@@ -491,9 +502,9 @@ do_local_backup() {
 	    tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" . \
 	        || { log ERROR "Failed to compress backup with gzip"; return 1; }
 	fi
-    log INFO "Created archive -> "$BACKUP_DIR/$BACKUP_FILE"
+	log INFO "Created archive -> $BACKUP_DIR/$BACKUP_FILE"	
 
-	# sha256 checksum
+  	# sha256 checksum
 	if [[ -f "$BACKUP_DIR/$BACKUP_FILE" ]]; then
     sha256sum "$BACKUP_DIR/$BACKUP_FILE" > "$BACKUP_DIR/$BACKUP_FILE.sha256" \
         || { log ERROR "Failed to write checksum"; return 1; }
@@ -501,7 +512,7 @@ do_local_backup() {
 	    log ERROR "Archive not found after compression: $BACKUP_DIR/$BACKUP_FILE"
 	    return 1
 	fi
- 	log INFO "Created checksum -> "$BACKUP_DIR/"$BACKUP_DIR/$BACKUP_FILE.sha256"
+	log INFO "Created checksum -> $BACKUP_DIR/$BACKUP_FILE.sha256"
 
 	log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
  	rm -rf "$BACKUP_PATH"
@@ -556,7 +567,7 @@ upload_backup_rclone() {
     # Safer remote prune
     log INFO "Pruning remote archives older than ${DAYS_TO_KEEP:-7} days (pattern: n8n_backup_*.tar.gz)"
     local tmpfilter; tmpfilter="$(mktemp)"
-	printf "%s\n" "+ n8n_backup_*.tar.gz" "+ n8n_backup_*.tar.gz.sha256" "+ backup_summary.md" "- *" > "$tmpfilter"
+	printf "%s\n" "+ n8n_backup_*.tar.gz" "+ n8n_backup_*.tar.gz.sha256" "- *" > "$tmpfilter"
     rclone delete "$REMOTE" --min-age "${DAYS_TO_KEEP:-7}d" --filter-from "$tmpfilter" --rmdirs \
         || log WARN "Remote prune returned non-zero (continuing)."
     rm -f "$tmpfilter"
@@ -676,7 +687,6 @@ Log File: $LOG_FILE"
 print_backup_summary() {
 	local summary_file="$BACKUP_DIR/backup_summary.md"
     local email_status email_reason
-    local W=24  # label column width
 	log INFO "Print a summary of what happened..."
 
     # Determine whether an email was sent
@@ -942,18 +952,19 @@ restore_n8n() {
 	# List volumes will be restored
 	# - If the sql_file exists: No need to restore volume postgres-data (to avoid conflict), the other volumes can be restored as normal.
 	# - If the sql_file does not exist: restore all volumes ("n8n-data" "postgres-data" "letsencrypt")
- 	if [[ -n "$dump_file" || -n "$sql_file" ]]; then
+ 	local RESTORE_VOLUMES=("${VOLUMES[@]}")
+  	if [[ -n "$dump_file" || -n "$sql_file" ]]; then
         log INFO "SQL dump present. Skipping postgres-data volume restore..."
         local filtered=()
-        for v in "${VOLUMES[@]}"; do
+        for v in "${RESTORE_VOLUMES[@]}"; do
             [[ "$v" == "postgres-data" ]] || filtered+=("$v")
         done
-        VOLUMES=("${filtered[@]}")
+        RESTORE_VOLUMES=("${filtered[@]}")
     fi
 
  	# Cleanup volumes to avoid DB conflict
     log INFO "Cleaning existing Docker volumes before restore..."
-    for vol in "${VOLUMES[@]}"; do
+    for vol in "${RESTORE_VOLUMES[@]}"; do
         if docker volume inspect "$vol" >/dev/null 2>&1; then
             docker volume rm "$vol" && log INFO "Removed volume: $vol"
         else
@@ -963,7 +974,7 @@ restore_n8n() {
 
     # Restore Docker volumes
 	log INFO "Restoring volumes from archive..."
-	for vol in "${VOLUMES[@]}"; do
+	for vol in "${RESTORE_VOLUMES[@]}"; do
 		local vol_file
 		vol_file="$(find "$restore_dir" -name "*${vol}_*.tar.gz" -print -quit || true)"
 		if [[ -z "${vol_file:-}" ]]; then
@@ -1042,8 +1053,8 @@ restore_n8n() {
 
     N8N_VERSION="$(get_current_n8n_version)"
  	local restored_list=""
-	if ((${#VOLUMES[@]})); then
-		restored_list=$(printf '%s, ' "${VOLUMES[@]}")
+	if ((${#RESTORE_VOLUMES[@]})); then
+		restored_list=$(printf '%s, ' "${RESTORE_VOLUMES[@]}")
 		restored_list=${restored_list%, }
 	else
 		restored_list="(none)"
