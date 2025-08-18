@@ -62,6 +62,14 @@ UPLOAD_STATUS=""
 BACKUP_FILE=""
 DRIVE_LINK=""
 
+# rclone robust flags
+RCLONE_FLAGS=(--transfers=4 --checkers=8 --retries=5 --low-level-retries=10 --contimeout=30s --timeout=5m --retries-sleep=10s)
+
+################################################################################
+# box_line
+################################################################################
+box_line() { printf "%-22s%s\n" "$1" "$2"; }
+
 ################################################################################
 # can_send_email
 ################################################################################
@@ -121,6 +129,9 @@ send_email() {
 
     # End of multipart
     echo "--$boundary--"
+	local pass_tmp
+	pass_tmp="$(mktemp)"
+	printf '%s' "$SMTP_PASS" > "$pass_tmp"
     } | msmtp \
         --host=smtp.gmail.com \
         --port=587 \
@@ -128,15 +139,17 @@ send_email() {
         --tls=on \
         --from="$SMTP_USER" \
         --user="$SMTP_USER" \
-        --passwordeval="echo $SMTP_PASS" \
+		--passwordeval="cat $pass_tmp" \
         "$EMAIL_TO"
 
-    if [[ $? -eq 0 ]]; then
-        log INFO "Email sent with subject: $subject"
-        EMAIL_SENT=true
-    else
-        log WARN "Failed to send email with subject: $subject"
-    fi
+	local rc=$?
+	rm -f "$pass_tmp"
+	if [[ $rc -eq 0 ]]; then
+	    log INFO "Email sent with subject: $subject"
+	    EMAIL_SENT=true
+	else
+	    log WARN "Failed to send email with subject: $subject"
+	fi
 }
 
 ################################################################################
@@ -384,12 +397,30 @@ do_local_backup() {
 
     log INFO "Compressing backup folder..."
     BACKUP_FILE="n8n_backup_${N8N_VERSION}_${DATE}.tar.gz"
-    tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" .
-    log INFO "Created archive -> $BACKUP_FILE"
+
+	if command -v pigz >/dev/null 2>&1; then
+    tar -C "$BACKUP_PATH" -cf - . | pigz > "$BACKUP_DIR/$BACKUP_FILE" \
+        || { log ERROR "Failed to compress backup with pigz"; return 1; }
+	else
+	    tar -czf "$BACKUP_DIR/$BACKUP_FILE" -C "$BACKUP_PATH" . \
+	        || { log ERROR "Failed to compress backup with gzip"; return 1; }
+	fi
+    log INFO "Created archive -> "$BACKUP_DIR/$BACKUP_FILE"
+
+	# sha256 checksum
+	if [[ -f "$BACKUP_DIR/$BACKUP_FILE" ]]; then
+    sha256sum "$BACKUP_DIR/$BACKUP_FILE" > "$BACKUP_DIR/$BACKUP_FILE.sha256" \
+        || { log ERROR "Failed to write checksum"; return 1; }
+	else
+	    log ERROR "Archive not found after compression: $BACKUP_DIR/$BACKUP_FILE"
+	    return 1
+	fi
+ 	log INFO "Created checksum -> "$BACKUP_DIR/"$BACKUP_DIR/$BACKUP_FILE.sha256"
 
 	log INFO "Cleaning up local backups older than $DAYS_TO_KEEP days..."
  	rm -rf "$BACKUP_PATH"
     find "$BACKUP_DIR" -type f -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
+	find "$BACKUP_DIR" -type f -name "*.sha256" -mtime +$DAYS_TO_KEEP -exec rm -f {} \;
 	find "$BACKUP_DIR" -maxdepth 1 -type d -name 'backup_*' -empty -exec rmdir {} \;
 	log INFO "Removed any empty backup_<timestamp> folders"
     return 0
@@ -411,25 +442,24 @@ upload_backup_rclone() {
 
     # Normalize remote (force one colon)
     local REMOTE="${RCLONE_REMOTE%:}:"
-
     log INFO "Uploading backup files directly to remote root ($REMOTE)"
-    if \
-        rclone copy "$BACKUP_DIR/$BACKUP_FILE" "$REMOTE" && \
-        rclone copy "$BACKUP_DIR/backup_summary.md" "$REMOTE"
-    then
+
+	if  rclone copyto "$BACKUP_DIR/$BACKUP_FILE" "$REMOTE/$BACKUP_FILE" "${RCLONE_FLAGS[@]}" \
+        && rclone copyto "$BACKUP_DIR/$BACKUP_FILE.sha256" "$REMOTE/$BACKUP_FILE.sha256" "${RCLONE_FLAGS[@]}" \
+        && rclone copyto "$BACKUP_DIR/backup_summary.md" "$REMOTE/backup_summary.md" "${RCLONE_FLAGS[@]}"; then
         UPLOAD_STATUS="SUCCESS"
-        log INFO "Uploaded '$BACKUP_FILE' and 'backup_summary.md' successfully."
-        ret=0
+        log INFO "Uploaded '$BACKUP_FILE', checksum and 'backup_summary.md' successfully."
+		ret=0
     else
         UPLOAD_STATUS="FAIL"
         log ERROR "One or more uploads failed"
-        ret=1
+		ret=1
     fi
 
-    # Safer remote prune (only tarballs we created)
+    # Safer remote prune
     log INFO "Pruning remote archives older than ${DAYS_TO_KEEP:-7} days (pattern: n8n_backup_*.tar.gz)"
     local tmpfilter; tmpfilter="$(mktemp)"
-    printf "%s\n" "+ n8n_backup_*.tar.gz" "- *" > "$tmpfilter"
+	printf "%s\n" "+ n8n_backup_*.tar.gz" "+ n8n_backup_*.tar.gz.sha256" "+ backup_summary.md" "- *" > "$tmpfilter"
     rclone delete "$REMOTE" --min-age "${DAYS_TO_KEEP:-7}d" --filter-from "$tmpfilter" --rmdirs \
         || log WARN "Remote prune returned non-zero (continuing)."
     rm -f "$tmpfilter"
@@ -440,10 +470,6 @@ upload_backup_rclone() {
 ################################################################################
 # send_mail_on_action()
 #   Sends a final notification email based on backup & upload results.
-#   Requires globals:
-#     BACKUP_STATUS     ("SUCCESS" / "FAIL" / "SKIPPED")
-#     UPLOAD_STATUS     ("SUCCESS" / "FAIL" / "SKIPPED")
-#     NOTIFY_ON_SUCCESS (boolean)
 ################################################################################
 send_mail_on_action() {
     local subject body
@@ -546,44 +572,37 @@ print_backup_summary() {
     fi
 
     echo "═════════════════════════════════════════════════════════════"
-    printf "%-${W}s%s\n" "Action:"                 "$ACTION"
-    printf "%-${W}s%s\n" "Status:"                 "$BACKUP_STATUS"
-    printf "%-${W}s%s\n" "Timestamp:"              "$DATE"
-    printf "%-${W}shttps://%s\n" "Domain:"          "$DOMAIN"
-    [[ -n "$BACKUP_FILE" ]] && printf "%-${W}s%s/%s\n" "Backup file:" "$BACKUP_DIR" "$BACKUP_FILE"
-    printf "%-${W}s%s\n" "N8N Version:"            "$N8N_VERSION"
-    printf "%-${W}s%s\n" "Log File:"               "$LOG_FILE"
-    printf "%-${W}s%s\n" "Daily tracking:"         "$summary_file"
-
+    box_line "Action:"    "$ACTION"
+    box_line "Status:"    "$BACKUP_STATUS"
+	box_line "Timestamp:"    "$DATE"
+    box_line "Domain:"    "https://$DOMAIN"
+    [[ -n "$BACKUP_FILE" ]] && box_line "Backup file:"    "$BACKUP_DIR/$BACKUP_FILE"
+    box_line "N8N Version:"    "$N8N_VERSION"
+    box_line "Log File:"    "$LOG_FILE"
+    box_line "Daily tracking:"    "$summary_file"
     case "$UPLOAD_STATUS" in
         "SUCCESS")
-            printf "%-${W}s%s\n" "Google Drive upload:" "SUCCESS"
-            printf "%-${W}s%s\n" "Folder link:"         "$DRIVE_LINK"
+            box_line "Google Drive upload:"    "SUCCESS"
+            box_line "Folder link:"    "$DRIVE_LINK"
             ;;
         "SKIPPED")
-            printf "%-${W}s%s\n" "Google Drive upload:" "SKIPPED"
+            box_line "Google Drive upload:"    "SKIPPED"
             ;;
         *)
-            printf "%-${W}s%s\n" "Google Drive upload:" "FAILED"
+            box_line "Google Drive upload:"    "FAILED"
             ;;
     esac
-    printf "%-${W}s%s\n" "Email notification:" "$( [[ -n "$email_reason" ]] && echo "$email_status $email_reason" || echo "$email_status" )"
+    if [[ -n "$email_reason" ]]; then
+        box_line "Email notification:"    "$email_status $email_reason"
+    else
+        box_line "Email notification:"    "$email_status"
+    fi
     echo "═════════════════════════════════════════════════════════════"
 }
 
 ################################################################################
 # backup_n8n()
-#   Main backup workflow: health check, dump volumes & DB, archive, sync, notify.
-# For a Docker-based n8n installation, here’s exactly what you need to back up to ensure full recovery:
-# n8n-data, postgres-data, and letsencrypt volumes
-# SQL dump of PostgreSQL database
-# .env and docker-compose.yml files
-# Manual backup:
-# n8n-data: Stores n8n workflows, credentials, and settings.
-#     docker run --rm -v n8n-data:/data -v $BACKUP_DIR:/backup alpine tar czf /backup/n8n-data.tar.gz -C /data .
-# postgres-data:	Stores the Postgres database used by n8n.
-#    docker exec postgres pg_dump -U n8n -d n8n > "$BACKUP_DIR/n8n_db_dump.sql"
-# env file and docker-compose.yml
+#   Main backup workflow: health check, dump volumes & DB, archive, sync, notify
 ################################################################################
 backup_n8n() {
     N8N_VERSION="$(get_current_n8n_version)"
@@ -659,14 +678,23 @@ fetch_restore_archive_if_remote() {
         mkdir -p "$tmp_dir"
 
         # Derive a local filename (keep the basename of the remote object)
+		# Sanitize basename: replace ':' with '_'
         local base
-        base="$(basename "$TARGET_RESTORE_FILE")"
+		base="$(basename "$TARGET_RESTORE_FILE" | tr ':' '_')"
         local local_path="$tmp_dir/$base"
 
         log INFO "Fetching backup from remote: $TARGET_RESTORE_FILE"
-        # Use 'copyto' so we can name the destination exactly
-        if rclone copyto "$TARGET_RESTORE_FILE" "$local_path"; then
+		if rclone copyto "$TARGET_RESTORE_FILE" "$local_path" "${RCLONE_FLAGS[@]}"; then
             log INFO "Downloaded to: $local_path"
+            # try to fetch checksum and verify if available
+			log INFO "Verifying checksum..."
+            if rclone copyto "${TARGET_RESTORE_FILE}.sha256" "${local_path}.sha256" "${RCLONE_FLAGS[@]}"; then
+                (cd "$tmp_dir" && sha256sum -c "$(basename "${local_path}.sha256")") \
+                    || { log ERROR "Checksum verification failed for $local_path"; return 1; }
+                log INFO "Checksum verified."
+            else
+                log WARN "Checksum file not found remotely. Skipping verification."
+            fi
             TARGET_RESTORE_FILE="$local_path"
             echo "$TARGET_RESTORE_FILE" > "$tmp_dir/.last_fetched"
         else
@@ -701,7 +729,6 @@ restore_n8n() {
 	tar -xzf "$TARGET_RESTORE_FILE" -C "$restore_dir" \
         || { log ERROR "Failed to extract $TARGET_RESTORE_FILE"; return 1; }
 
-	#require .env.bak & compose from backup, and enforce key presence ----
 	local backup_env_path="$restore_dir/.env.bak"
 	local current_env_path="$N8N_DIR/.env"
  	local backup_compose_path="$restore_dir/docker-compose.yml.bak"
@@ -742,23 +769,25 @@ restore_n8n() {
   	# Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
 	compose down --volumes --remove-orphans \
-      || { log ERROR "docker-compose down failed"; return 1; }
+		|| { log ERROR "docker compose down failed"; return 1; }
 
 	# Check if we have a SQL database
-  	local sql_file
-  	sql_file="$(find "$restore_dir" -name "n8n_postgres_dump_*.sql" -print -quit || true)"
+    local dump_file=""
+    local sql_file=""
+    dump_file="$(find "$restore_dir" -name "n8n_postgres_dump_*.dump" -print -quit || true)"
+    sql_file="$(find "$restore_dir" -name "n8n_postgres_dump_*.sql" -print -quit || true)"
 
 	# List volumes will be restored
 	# - If the sql_file exists: No need to restore volume postgres-data (to avoid conflict), the other volumes can be restored as normal.
 	# - If the sql_file does not exist: restore all volumes ("n8n-data" "postgres-data" "letsencrypt")
-	if [[ -n "${sql_file:-}" ]]; then
-    	log INFO "SQL dump found. Skipping postgres-data volume restore..."
-		local filtered=()
-		for v in "${VOLUMES[@]}"; do
-			[[ "$v" == "postgres-data" ]] || filtered+=("$v")
-		done
-		VOLUMES=("${filtered[@]}")
-	fi
+ 	if [[ -n "$dump_file" || -n "$sql_file" ]]; then
+        log INFO "SQL dump present. Skipping postgres-data volume restore..."
+        local filtered=()
+        for v in "${VOLUMES[@]}"; do
+            [[ "$v" == "postgres-data" ]] || filtered+=("$v")
+        done
+        VOLUMES=("${filtered[@]}")
+    fi
 
  	# Cleanup volumes to avoid DB conflict
     log INFO "Cleaning existing Docker volumes before restore..."
@@ -799,25 +828,32 @@ restore_n8n() {
 	local PG_CONT="postgres"
 	local DB_USER="${DB_POSTGRESDB_USER:-${POSTGRES_USER:-n8n}}"
 	local DB_NAME="${DB_POSTGRESDB_DATABASE:-${POSTGRES_DB:-n8n}}"
-	
  	local POSTGRES_RESTORE_MODE=""
-	if [[ -n "${sql_file:-}" ]]; then
- 		POSTGRES_RESTORE_MODE="dump"
-		log INFO "SQL dump found: $(basename "$sql_file"). Will restore via psql."
-		log INFO "Terminating active connections to ${DB_NAME}..."
-		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c \
-			"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" || true
 
-		log INFO "Dropping & recreating database ${DB_NAME}..."
-		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB_NAME};"
-		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+ 	if [[ -n "$dump_file" ]]; then
+        POSTGRES_RESTORE_MODE="dump"
+        log INFO "Custom dump found: $(basename "$dump_file"). Restoring via pg_restore..."
+        log INFO "Recreate database ${DB_NAME}..."
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c \
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" || true
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB_NAME};"
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+        docker exec -i "$PG_CONT" pg_restore -U "$DB_USER" -d "${DB_NAME}" -c -v < "$dump_file"
 
-		log INFO "Restoring PostgreSQL DB from dump (single import)..."
-		docker exec -i "$PG_CONT" psql -U "$DB_USER" -d "${DB_NAME}" -v ON_ERROR_STOP=1 < "$sql_file"
-	else
-		POSTGRES_RESTORE_MODE="volume"
-  		log INFO "No SQL dump found. Assuming the postgres-data volume already contains the DB. Skipping SQL import."
-	fi
+    elif [[ -n "$sql_file" ]]; then
+        POSTGRES_RESTORE_MODE="dump"
+        log INFO "SQL dump found: $(basename "$sql_file"). Restoring via psql..."
+        log INFO "Recreate database ${DB_NAME}..."
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c \
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${DB_NAME}' AND pid <> pg_backend_pid();" || true
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS ${DB_NAME};"
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};"
+        docker exec -i "$PG_CONT" psql -U "$DB_USER" -d "${DB_NAME}" -v ON_ERROR_STOP=1 < "$sql_file"
+
+    else
+        POSTGRES_RESTORE_MODE="volume"
+        log INFO "No SQL dump found. Assuming the postgres-data volume already contains the DB. Skipping SQL import."
+    fi
  
 	# When the PostgreSQL DB is ready, start other containers
 	log INFO "Starting the rest of the stack..."
@@ -838,7 +874,7 @@ restore_n8n() {
     # Optional: clean up any fetched temp archive
     if [[ -d "$BACKUP_DIR/_restore_tmp" ]]; then
         # Only remove files we created; ignore user local archives
-        find "$BACKUP_DIR/_restore_tmp" -type f -name 'n8n_backup_*.tar.gz' -delete || true
+        find "$BACKUP_DIR/_restore_tmp" -type f -name '*n8n_backup_*.tar.gz' -delete || true
         rmdir "$BACKUP_DIR/_restore_tmp" 2>/dev/null || true
     fi
 
@@ -852,18 +888,18 @@ restore_n8n() {
 	fi
     echo "═════════════════════════════════════════════════════════════"
 	echo "Restore completed successfully."
-    echo "Domain:               https://${DOMAIN}"
-    echo "Restore from file:    $requested_spec"
-    echo "Local archive used:   $TARGET_RESTORE_FILE"
-    echo "N8N Version:          $N8N_VERSION"
-	echo "N8N Directory:        $N8N_DIR"
-    echo "Log File:             $LOG_FILE"
-    echo "Timestamp:            $DATE"
-	echo "Volumes restored:     ${restored_list}"
+    box_line "Domain:"    "https://$DOMAIN"
+	box_line "Restore from file:"    "$requested_spec"
+ 	box_line "Local archive used:"    "$TARGET_RESTORE_FILE"
+  	box_line "N8N Version:"    "$N8N_VERSION"
+    box_line "N8N Directory:"    "$N8N_DIR"
+	box_line "Log File:"    "$LOG_FILE"
+    box_line "Timestamp:"    "$DATE"
+	box_line "Volumes restored:"    "${restored_list}"
 	if [[ "$POSTGRES_RESTORE_MODE" == "dump" ]]; then
-		echo "PostgreSQL:           Restored from SQL dump"
+        box_line "PostgreSQL:"    "Restored from SQL dump"
 	else
-		echo "PostgreSQL:           Restored from volume"
+  		box_line "PostgreSQL:"    "Restored from volume"
 	fi
     echo "═════════════════════════════════════════════════════════════"
 }
@@ -926,6 +962,7 @@ done
 # Main Execution
 ################################################################################
 check_root || { log ERROR "Please run as root (needed to read Docker volumes)."; exit 1; }
+
 # Initialize directories & logging
 DEFAULT_N8N_DIR="/home/n8n"
 mkdir -p "$DEFAULT_N8N_DIR"
@@ -952,6 +989,8 @@ require_cmd tar    || exit 1
 require_cmd curl   || exit 1
 require_cmd openssl|| exit 1
 require_cmd base64 || exit 1
+require_cmd awk    || exit 1
+require_cmd sha256sum || exit 1
 
 # Only require msmtp if we might send mail
 $EMAIL_EXPLICIT && require_cmd msmtp
