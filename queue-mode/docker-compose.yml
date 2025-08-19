@@ -42,7 +42,8 @@ services:
     image: postgres:14
     container_name: postgres
     restart: unless-stopped
-    env_file: [.env]
+    env_file:
+      - .env
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks: [n8n-network]
@@ -73,7 +74,8 @@ services:
     image: docker.n8n.io/n8nio/n8n:${N8N_IMAGE_TAG:-latest}
     container_name: n8n-main
     restart: unless-stopped
-    env_file: [.env]
+    env_file:
+      - .env
     volumes:
       - n8n-data:/home/node/.n8n
     depends_on:
@@ -116,10 +118,12 @@ services:
   # Worker(s) – scale horizontally
   n8n-worker:
     image: docker.n8n.io/n8nio/n8n:${N8N_IMAGE_TAG:-latest}
-    container_name: n8n-worker
     restart: unless-stopped
-    env_file: [.env]
+    env_file:
+      - .env
     command: n8n worker --concurrency=${N8N_WORKER_CONCURRENCY:-5}
+    volumes:
+      - n8n-data:/home/node/.n8n
     depends_on:
       postgres:
         condition: service_healthy
