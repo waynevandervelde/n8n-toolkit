@@ -34,48 +34,65 @@ Unleash the full potential of n8n by running it in **Queue Mode**, where executi
 ---
 
 ##  Architecture Overview
+# n8n Queue Mode — Scalable and Reliable Workflow Automation
 
-<div align="center">
+Unleash the full potential of n8n by running it in **Queue Mode**, where execution is distributed from the main interface to multiple workers via Redis. This setup ensures scalability, responsiveness, and resilience—even under load.
+
+---
+
+## 🚀 Why Queue Mode?
+
+- **Scalable Execution**: Offload heavy workflow processing to dedicated worker containers.
+- **Responsive UI**: Keep your editor fast and stable regardless of execution load.
+- **Reliability**: Workers handle jobs independently—failures won't block the main process.
+- **Flexible Deployment**: Horizontally scale workers based on demand.
+
+> Queue Mode works just like orchestration in Kubernetes, batch systems, or load-balanced services.  
+
+---
+
+## 🏗 Architecture Overview
 
 ```text
-   ┌───────────────────┐
-   │   Traefik Proxy   │
-   │ (Routes traffic)  │
-   └─────────┬─────────┘
-             │
-             ▼
-   ┌───────────────────┐
-   │   n8n-Main (UI)   │
-   │  - Editor & API   │
-   │  - Webhooks       │
-   │  - Schedules      │
-   └─────────┬─────────┘
-             │
-             │ Enqueues jobs
-             ▼
-   ┌───────────────────┐
-   │      Redis        │
-   │   (BullMQ Queue)  │
-   └─────────┬─────────┘
-             │
-   ┌─────────┴─────────┐
-   │                   │
-   ▼                   ▼
-┌───────────┐     ┌───────────┐
-│ Worker #1 │     │ Worker #2 │
-└─────┬─────┘     └─────┬─────┘
-      │                 │
-      └──────┬──────────┘
-             │
-             ▼
-   ┌───────────────────┐
-   │   Postgres DB     │
-   │ - Workflows       │
-   │ - Executions      │
-   │ - Credentials     │
-   └───────────────────┘
+                   ┌───────────────────┐
+                   │   Traefik Proxy   │
+                   │ (Routes traffic)  │
+                   └─────────┬─────────┘
+                             │
+                             ▼
+                   ┌───────────────────┐
+                   │   n8n-Main (UI)   │
+                   │  - Editor & API   │
+                   │  - Webhooks       │
+                   │  - Schedules      │
+                   └─────────┬─────────┘
+                             │
+                             │ Enqueues jobs
+                             ▼
+                   ┌───────────────────┐
+                   │      Redis        │
+                   │   (BullMQ Queue)  │
+                   └─────────┬─────────┘
+                             │
+        ┌────────────────────┴────────────────────┐
+        │                                         │
+        ▼                                         ▼
+┌───────────────────┐                   ┌───────────────────┐
+│   Worker #1       │                   │   Worker #2       │
+│ - Executes jobs   │                   │ - Executes jobs   │
+│ - Uses concurrency│                   │ - Uses concurrency│
+└─────────┬─────────┘                   └─────────┬─────────┘
+          │                                       │
+          └──────────────────┬────────────────────┘
+                             │
+                             ▼
+                   ┌───────────────────┐
+                   │   Postgres DB     │
+                   │ - Workflows       │
+                   │ - Executions      │
+                   │ - Credentials     │
+                   └───────────────────┘
 ```
-</div>
 
 ## Task Processing Flow (Queue Mode)
 - **Case: 1 Worker**
@@ -283,8 +300,7 @@ docker logs -f postgres
 
 ## Troubleshooting
 
-Even with Queue Mode properly configured, you may encounter issues.  
-This section covers the **most common problems** and how to fix them.
+Even with Queue Mode properly configured, you may encounter issues. This section covers the **most common problems** and how to fix them.
 
 ---
 
