@@ -54,7 +54,7 @@ Run the script from your n8n project folder (the one that contains your `docker-
 
 ## Requirements (one‑time)
 
-Install the tools the script needs (Ubuntu/Debian):
+- **Install the tools the script needs (Ubuntu/Debian)**
 
 ```bash
 sudo apt-get update
@@ -63,6 +63,28 @@ sudo apt-get install -y docker.io rsync tar msmtp-mta rclone dnsutils curl opens
 
 > `getopt` (from util‑linux) is usually already present on Ubuntu.\
 > Docker must be running, and your n8n stack should be up via `docker compose`.
+
+- **Check your `.env` file contains `N8N_ENCRYPTION_KEY`**  
+  n8n uses an encryption key to protect stored credentials. This key is critical for **backup and restore**.  
+
+  - If you already set `N8N_ENCRYPTION_KEY` in your `.env`, you’re good.  
+  - If not, n8n auto-generated one inside the main container on first run.  
+
+Retrieve it with:  
+```bash
+docker exec -it $(docker ps --format '{{.Names}}' | grep -E '^n8n($|-)' | head -n 1) \
+cat /home/node/.n8n/config | grep -oP '(?<="encryptionKey": ")[^"]+'
+```
+
+This will print the raw key, for example:
+```bash
+oZ+XKX2XpGuOgBLj+YyaOlcS8JgKkkE
+```
+
+- **Copy this into your .env file so it is persistent:**
+```bash
+N8N_ENCRYPTION_KEY=oZ+XKX2XpGuOgBLj+YyaOlcS8JgKkkE
+```
 
 ---
 
