@@ -35,48 +35,14 @@ Unleash the full potential of n8n by running it in **Queue Mode**, where executi
 
 ##  Architecture Overview
 
-```text
-                   ┌───────────────────┐
-                   │   Traefik Proxy   │
-                   │ (Routes traffic)  │
-                   └─────────┬─────────┘
-                             │
-                             ▼
-                   ┌───────────────────┐
-                   │   n8n-Main (UI)   │
-                   │  - Editor & API   │
-                   │  - Webhooks       │
-                   │  - Schedules      │
-                   └─────────┬─────────┘
-                             │
-                             │ Enqueues jobs
-                             ▼
-                   ┌───────────────────┐
-                   │      Redis        │
-                   │   (BullMQ Queue)  │
-                   └─────────┬─────────┘
-                             │
-        ┌────────────────────┴────────────────────┐
-        │                                         │
-        ▼                                         ▼
-┌───────────────────┐                   ┌───────────────────┐
-│   Worker #1       │                   │   Worker #2       │
-│ - Executes jobs   │                   │ - Executes jobs   │
-│ - Uses concurrency│                   │ - Uses concurrency│
-└─────────┬─────────┘                   └─────────┬─────────┘
-          │                                       │
-          └──────────────────┬────────────────────┘
-                             │
-                             ▼
-                   ┌───────────────────┐
-                   │   Postgres DB     │
-                   │ - Workflows       │
-                   │ - Executions      │
-                   │ - Credentials     │
-                   └───────────────────┘
-
-
-
+```mermaid
+graph TD
+  T[Traefik Proxy<br/>(Routes traffic)] --> M[n8n-Main<br/>(UI, API, Webhooks, Schedules)]
+  M --> R[Redis<br/>(BullMQ Queue)]
+  R --> W1[Worker #1<br/>Executes jobs<br/>Concurrency X]
+  R --> W2[Worker #2<br/>Executes jobs<br/>Concurrency Y]
+  W1 --> DB[(Postgres DB)]
+  W2 --> DB
 ```
 
 ## Task Processing Flow (Queue Mode)
@@ -98,6 +64,37 @@ sequenceDiagram
     W->>DB: Retrieve workflow data
     W->>W: Process workflow
     W->>DB: Save execution results
+
+    U->>M: Request execution status
+    M->>DB: Retrieve execution results
+    M-->>U: Return execution status
+```
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant M as n8n Main Service
+    participant R as Redis Queue
+    participant W1 as Worker #1
+    participant W2 as Worker #2
+    participant DB as PostgreSQL Database
+
+    U->>M: Trigger workflow execution
+    M->>R: Queue execution task (EXECUTIONS_MODE=queue)
+    R->>DB: Save execution request
+
+    par Workers poll tasks
+        W1->>R: Poll for tasks
+        R-->>W1: Return task (if available)
+        W1->>DB: Retrieve workflow data
+        W1->>W1: Process workflow
+        W1->>DB: Save execution results
+    and
+        W2->>R: Poll for tasks
+        R-->>W2: Return task (if available)
+        W2->>DB: Retrieve workflow data
+        W2->>W2: Process workflow
+        W2->>DB: Save execution results
+    end
 
     U->>M: Request execution status
     M->>DB: Retrieve execution results
@@ -303,7 +300,7 @@ This section covers the **most common problems** and how to fix them.
 
 ---
 
-### edis errors in logs
+### Redis errors in logs
 - **Cause**: Password mismatch or Redis crash.  
 - **Fix**:
   - If you enabled `--requirepass` in `docker-compose.yml`, keep `QUEUE_BULL_REDIS_PASSWORD` in `.env`.
@@ -393,5 +390,3 @@ When your workload grows, plan for scaling:
 - Scale **Postgres vertically** (more CPU/RAM) or move to a managed DB service for reliability.  
 - Split workflows into **different queues** if you have very different workload types (e.g., critical vs. batch jobs).  
 - Automate scaling with **Kubernetes** or **Docker Swarm**, letting the orchestrator add/remove workers dynamically.  
-
-Thanks
