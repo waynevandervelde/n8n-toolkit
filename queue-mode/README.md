@@ -6,21 +6,28 @@ Unleash the full potential of n8n by running it in **Queue Mode**, where executi
 
 ## Table of Contents
 
-  - [Why Queue Mode?](#why-queue-mode)
-  - [Architecture Overview](#architecture-overview)
-  - [Task Processing Flow (Queue Mode)](#task-processing-flow-queue-mode)
-  - [What is Queue Mode?](#what-is-queue-mode)
-  - [Configuration](#configuration)
-  - [Recommended VPS Sizing & Worker Strategy](#recommended-vps-sizing--worker-strategy)
-  - [Deployment Commands](#deployment-commands)
-  - [Health Checks](#health-checks)
-  - [Troubleshooting](#troubleshooting)
-    - [Quick Health Checklist](#quick-health-checklist)
-    - [Common Issues & Fixes](#common-issues--fixes)
-  - [Best Practices, Monitoring, and Scaling](#best-practices-monitoring-and-scaling)
-    - [Development Best Practices](#development-best-practices)
-    - [Monitor and Scale](#monitor-and-scale)
-    - [Scaling Larger Deployments](#scaling-larger-deployments)
+- [Why Queue Mode?](#why-queue-mode)
+- [Architecture Overview](#architecture-overview)
+- [Task Processing Flow (Queue Mode)](#task-processing-flow-queue-mode)
+- [What is Queue Mode?](#what-is-queue-mode)
+- [Configuration](#configuration)
+- [Recommended VPS Sizing & Worker Strategy](#recommended-vps-sizing--worker-strategy)
+- [Deployment Commands](#deployment-commands)
+- [Health check](#health-check)
+- [Troubleshooting](#troubleshooting)
+  - [UI is slow or unresponsive](#ui-is-slow-or-unresponsive)
+  - [Jobs stuck in “Waiting” state](#jobs-stuck-in-waiting-state)
+  - [Database connection errors](#database-connection-errors)
+  - [Redis errors in logs](#redis-errors-in-logs)
+  - [Workflows stop after running a while](#workflows-stop-after-running-a-while)
+  - [Backup/restore issues (credentials missing)](#backuprestore-issues-credentials-missing)
+  - [Certificates (SSL) not working](#certificates-ssl-not-working)
+- [Best Practices, Monitoring, and Scaling](#best-practices-monitoring-and-scaling)
+  - [Best Practices for n8n Development](#best-practices-for-n8n-development)
+  - [Monitor and Scale](#monitor-and-scale)
+  - [Scaling Queue Mode for Larger Deployments](#scaling-queue-mode-for-larger-deployments)
+
+---
 
 ##  Why Queue Mode?
 
@@ -33,25 +40,7 @@ Unleash the full potential of n8n by running it in **Queue Mode**, where executi
 
 ---
 
-##  Architecture Overview
-# n8n Queue Mode — Scalable and Reliable Workflow Automation
-
-Unleash the full potential of n8n by running it in **Queue Mode**, where execution is distributed from the main interface to multiple workers via Redis. This setup ensures scalability, responsiveness, and resilience—even under load.
-
----
-
-## 🚀 Why Queue Mode?
-
-- **Scalable Execution**: Offload heavy workflow processing to dedicated worker containers.
-- **Responsive UI**: Keep your editor fast and stable regardless of execution load.
-- **Reliability**: Workers handle jobs independently—failures won't block the main process.
-- **Flexible Deployment**: Horizontally scale workers based on demand.
-
-> Queue Mode works just like orchestration in Kubernetes, batch systems, or load-balanced services.  
-
----
-
-## 🏗 Architecture Overview
+## Architecture Overview
 
 ```text
                    ┌───────────────────┐
