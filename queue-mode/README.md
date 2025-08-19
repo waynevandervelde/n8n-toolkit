@@ -35,18 +35,53 @@ Unleash the full potential of n8n by running it in **Queue Mode**, where executi
 
 ##  Architecture Overview
 
-```mermaid
-graph TD
-  T[Traefik Proxy<br/>(Routes traffic)] --> M[n8n-Main<br/>(UI, API, Webhooks, Schedules)]
-  M --> R[Redis<br/>(BullMQ Queue)]
-  R --> W1[Worker #1<br/>Executes jobs<br/>Concurrency X]
-  R --> W2[Worker #2<br/>Executes jobs<br/>Concurrency Y]
-  W1 --> DB[(Postgres DB)]
-  W2 --> DB
+<div align="center">
+
+```text
+   ┌───────────────────┐
+   │   Traefik Proxy   │
+   │ (Routes traffic)  │
+   └─────────┬─────────┘
+             │
+             ▼
+   ┌───────────────────┐
+   │   n8n-Main (UI)   │
+   │  - Editor & API   │
+   │  - Webhooks       │
+   │  - Schedules      │
+   └─────────┬─────────┘
+             │
+             │ Enqueues jobs
+             ▼
+   ┌───────────────────┐
+   │      Redis        │
+   │   (BullMQ Queue)  │
+   └─────────┬─────────┘
+             │
+   ┌─────────┴─────────┐
+   │                   │
+   ▼                   ▼
+┌───────────┐     ┌───────────┐
+│ Worker #1 │     │ Worker #2 │
+└─────┬─────┘     └─────┬─────┘
+      │                 │
+      └──────┬──────────┘
+             │
+             ▼
+   ┌───────────────────┐
+   │   Postgres DB     │
+   │ - Workflows       │
+   │ - Executions      │
+   │ - Credentials     │
+   └───────────────────┘
 ```
+</div>
 
 ## Task Processing Flow (Queue Mode)
-
+- **Case: 1 Worker**
+  - All workflow executions are pulled from **Redis** and processed by a single worker container.
+  - Concurrency limits how many executions that worker can run in parallel (e.g., `N8N_WORKER_CONCURRENCY=5`).
+  - If the worker is busy or crashes, execution throughput is limited.
 ```mermaid
 sequenceDiagram
     participant U as User
@@ -69,6 +104,11 @@ sequenceDiagram
     M->>DB: Retrieve execution results
     M-->>U: Return execution status
 ```
+- **Case: 2 Workers**
+  - Both workers poll Redis at the same time.  
+  - Redis distributes tasks between them (first come, first served).  
+  - This effectively **doubles the processing capacity** (assuming similar concurrency per worker).  
+  - If one worker crashes, the other keeps processing, which improves **resilience**.
 ```mermaid
 sequenceDiagram
     participant U as User
