@@ -157,9 +157,9 @@ In **single mode**, one n8n container handles **everything** (UI, webhooks, exec
 - **Postgres** → database for workflows, execution history, and credentials
 
 Benefits:
-- 🚀 Horizontal scaling → add workers for more throughput
-- 🛡️ Isolated workloads → UI stays responsive even under heavy execution load
-- ⚙️ Configurable concurrency → fine-tune how many workflows each worker runs in parallel
+- Horizontal scaling → add workers for more throughput
+- Isolated workloads → UI stays responsive even under heavy execution load
+- Configurable concurrency → fine-tune how many workflows each worker runs in parallel
 
 ---
 
@@ -425,7 +425,9 @@ It’s important to **monitor your queue mode setup** so it doesn’t bottleneck
 - **Application Monitoring**
   - n8n UI → Settings → Executions shows active and past jobs.
   - For advanced monitoring, integrate **Prometheus + Grafana** to visualize queue size, worker load, and execution times.
-    
+
+---
+
 ### Scaling Queue Mode for Larger Deployments
 
 When your workload grows, plan for scaling:
