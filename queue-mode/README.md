@@ -212,6 +212,10 @@ docker compose config
 # Pull images (optional but recommended)
 docker compose pull
 
+# Manual create volume
+for v in n8n-data postgres-data redis-data letsencrypt; do docker volume create "$v"; done
+docker volume ls | grep -E 'n8n-data|postgres-data|redis-data|letsencrypt'
+
 # Start everything (Traefik, Postgres, Redis, n8n-main, 1 worker)
 docker compose up -d
 
@@ -225,12 +229,14 @@ Run these commands after deployment to verify everything is working:
 
 ### n8n-main (UI / API):
 ```bash
-docker exec -it n8n-main wget --spider -q http://localhost:5678/healthz && echo "n8n-main OK"
+docker exec -it n8n-main sh -lc 'wget --spider -q http://127.0.0.1:5678/healthz && echo "n8n-main OK" || echo FAIL'
 ```
 Should print:
 ```bash
 n8n-main OK
 ```
+###
+
 ### Queue mode confirmation:
 ```bash
 docker exec -it n8n-main printenv | grep EXECUTIONS_MODE
@@ -242,50 +248,209 @@ EXECUTIONS_MODE=queue
 
 ### Redis (queue backend)
 ```bash
-docker compose exec redis redis-cli ping
+export QUEUE_BULL_REDIS_PASSWORD=PASTE_16B       # output of command openssl rand -base64 16 
+docker compose exec redis redis-cli -a "$QUEUE_BULL_REDIS_PASSWORD" ping
 ```
 Should return:
 ```nginx
 PONG
 ```
 ### Postgres (database):
-
+- Test DB from postgres (verify POSTGRES_PASSWORD)
 ```bash
-docker exec -it postgres pg_isready -U n8n
+docker compose exec postgres bash -lc 'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U n8n -d n8n -c "select 1"'
+```
+Should return:
+```bash
+ ?column?
+----------
+        1
+(1 row)
+```
+- List DB
+```bash
 docker compose exec postgres psql -U n8n -d n8n -c "\dt"
 ```
 Should return a list of tables. If empty, that’s fine on first boot — tables will appear after you create workflows.
+```bash
+                 List of relations
+ Schema |            Name            | Type  | Owner
+--------+----------------------------+-------+-------
+ public | annotation_tag_entity      | table | n8n
+ public | auth_identity              | table | n8n
+ public | auth_provider_sync_history | table | n8n
+ public | credentials_entity         | table | n8n
+ public | event_destinations         | table | n8n
+ public | execution_annotation_tags  | table | n8n
+ public | execution_annotations      | table | n8n
+ public | execution_data             | table | n8n
+ public | execution_entity           | table | n8n
+ public | execution_metadata         | table | n8n
+ public | folder                     | table | n8n
+ public | folder_tag                 | table | n8n
+ public | insights_by_period         | table | n8n
+ public | insights_metadata          | table | n8n
+ public | insights_raw               | table | n8n
+ public | installed_nodes            | table | n8n
+ public | installed_packages         | table | n8n
+ public | invalid_auth_token         | table | n8n
+ public | migrations                 | table | n8n
+ public | processed_data             | table | n8n
+ public | project                    | table | n8n
+ public | project_relation           | table | n8n
+ public | settings                   | table | n8n
+ public | shared_credentials         | table | n8n
+ public | shared_workflow            | table | n8n
+ public | tag_entity                 | table | n8n
+ public | test_case_execution        | table | n8n
 
+```
 ### Traefik TLS:
 ```bash
 curl -I https://$DOMAIN   # Expect 200/302 and valid certificate
 ```
+Example logs:
+```bash
+root@ubuntu-s-1vcpu-1gb-sgp1-01:~/n8n-main/queue-mode# curl -I https://n8n.yourdomain.com
+HTTP/2 200
+accept-ranges: bytes
+cache-control: public, max-age=86400
+content-type: text/html; charset=utf-8
+date: Tue, 19 Aug 2025 15:02:33 GMT
+etag: W/"3ec-198c2d3b96d"
+last-modified: Tue, 19 Aug 2025 14:55:12 GMT
+strict-transport-security: max-age=315360000; includeSubDomains; preload
+vary: Accept-Encoding
+vary: Accept-Encoding
+x-content-type-options: nosniff
+x-xss-protection: 1; mode=block
+content-length: 1004
+```
 
 ### Worker connectivity
-
+- List all running containers:
 ```bash
-# n8n main (UI, webhooks, scheduler)
-docker logs -f n8n-main
+docker compose ps --format "table {{.Names}}\t{{.Status}}"
+```
+You will see logs:
+```bash
+docker compose ps --format "table {{.Names}}\t{{.Status}}"
+<no value>                     STATUS
+n8n-main                       Up 2 minutes (healthy)
+postgres                       Up 2 minutes (healthy)
+queue-mode-n8n-runner-main-1   Up 2 minutes
+queue-mode-n8n-worker-1        Up 2 minutes
+queue-mode-n8n-worker-2        Up 2 minutes
+redis                          Up 2 minutes (healthy)
+traefik                        Up 2 minutes (healthy)
 
-# Worker(s)
-# when you scale a service with Compose, Docker creates multiple containers with numbered suffixes:
+```
+
+- Check container logs n8n-main
+```bash
+docker compose logs -f n8n-main
+```
+You will see logs:
+```bash
+Initializing n8n process
+n8n ready on ::, port 5678
+n8n Task Broker ready on 0.0.0.0, port 5679
+[license SDK] Skipping renewal on init: license cert is not initialized
+Version: 1.107.3
+
+Editor is now accessible via:
+https://n8n.yourdomain.com
+```
+
+- Check container logs for n8n-runner-main
+```bash
+docker compose logs -f n8n-runner-main
+```
+```bash
+root@ubuntu-s-1vcpu-1gb-sgp1-01:~/n8n-main/queue-mode# docker compose logs -f n8n-runner-main
+n8n-runner-main-1  | 2025/08/19 16:22:54 INFO  Starting launcher...
+n8n-runner-main-1  | 2025/08/19 16:22:54 INFO  Waiting for task broker to be ready...
+n8n-runner-main-1  | 2025/08/19 16:22:54 INFO  Starting launcher's health check server at port 5680
+
+```
+- Check log workers
+```bash
 # Worker 1
-docker logs -f n8n-worker-1
+docker logs -f queue-mode-n8n-worker-2
 
 # Worker 2
-docker logs -f n8n-worker-2
-
-# List all worker containers:
-docker ps --filter "name=n8n-worker" --format "table {{.Names}}\t{{.Status}}"
+docker logs -f queue-mode-n8n-worker-1
 
 # Streams logs from all scaled worker containers in one view (very useful to see load balancing in action).
 docker compose logs -f n8n-worker
-
-# Redis & Postgres
-docker logs -f redis
-docker logs -f postgres
+```
+You will see logs:
+```bash
+root@ubuntu-s-1vcpu-1gb-sgp1-01:~/n8n-main/queue-mode# docker compose logs -f n8n-worker
+n8n-worker-2  | n8n Task Broker ready on 0.0.0.0, port 5679
+n8n-worker-2  | [license SDK] Skipping renewal on init: renewOnInit is disabled in config
+n8n-worker-2  | [license SDK] Skipping renewal on init: autoRenewEnabled is disabled in config
+n8n-worker-2  | [license SDK] Skipping renewal on init: license cert is not initialized
+n8n-worker-2  |
+n8n-worker-2  | n8n worker is now ready
+n8n-worker-2  |  * Version: 1.107.3
+n8n-worker-2  |  * Concurrency: 5
+n8n-worker-2  |
+n8n-worker-2  |
+n8n-worker-2  | n8n worker server listening on port 5678
+n8n-worker-1  | n8n Task Broker ready on 0.0.0.0, port 5679
+n8n-worker-1  | [license SDK] Skipping renewal on init: renewOnInit is disabled in config
+n8n-worker-1  | [license SDK] Skipping renewal on init: autoRenewEnabled is disabled in config
+n8n-worker-1  | [license SDK] Skipping renewal on init: license cert is not initialized
+n8n-worker-1  |
+n8n-worker-1  | n8n worker is now ready
+n8n-worker-1  |  * Version: 1.107.3
+n8n-worker-1  |  * Concurrency: 5
+n8n-worker-1  |
+n8n-worker-1  |
+n8n-worker-1  | n8n worker server listening on port 5678
 ```
 
+- Check log for Redis
+```bash
+docker logs -f redis
+```
+You will see logs:
+```bash
+root@ubuntu-s-1vcpu-1gb-sgp1-01:~/n8n-main/queue-mode# docker logs -f redis
+1:C 19 Aug 2025 16:22:46.321 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+1:C 19 Aug 2025 16:22:46.322 * oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+1:C 19 Aug 2025 16:22:46.322 * Redis version=7.4.5, bits=64, commit=00000000, modified=0, pid=1, just started
+1:C 19 Aug 2025 16:22:46.322 * Configuration loaded
+1:M 19 Aug 2025 16:22:46.322 * monotonic clock: POSIX clock_gettime
+1:M 19 Aug 2025 16:22:46.325 * Running mode=standalone, port=6379.
+1:M 19 Aug 2025 16:22:46.326 * Server initialized
+1:M 19 Aug 2025 16:22:46.326 * Loading RDB produced by version 7.4.5
+1:M 19 Aug 2025 16:22:46.326 * RDB age 183 seconds
+1:M 19 Aug 2025 16:22:46.326 * RDB memory usage when created 1.27 Mb
+1:M 19 Aug 2025 16:22:46.326 * Done loading RDB, keys loaded: 0, keys expired: 1.
+1:M 19 Aug 2025 16:22:46.326 * DB loaded from disk: 0.000 seconds
+1:M 19 Aug 2025 16:22:46.326 * Ready to accept connections tcp
+```
+
+- Check log for Postgres
+```bash
+docker logs -f postgres
+```
+You will see logs:
+```bash
+root@ubuntu-s-1vcpu-1gb-sgp1-01:~/n8n-main/queue-mode# docker logs -f postgres
+
+PostgreSQL Database directory appears to contain a database; Skipping initialization
+
+2025-08-19 16:22:46.689 UTC [1] LOG:  starting PostgreSQL 14.19 (Debian 14.19-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+2025-08-19 16:22:46.689 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+2025-08-19 16:22:46.690 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+2025-08-19 16:22:46.695 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+2025-08-19 16:22:46.704 UTC [25] LOG:  database system was shut down at 2025-08-19 16:19:43 UTC
+2025-08-19 16:22:46.724 UTC [1] LOG:  database system is ready to accept connections
+
+```
 
 ## Troubleshooting
 
@@ -357,8 +522,8 @@ Even with Queue Mode properly configured, you may encounter issues. This section
 
 ---
 
-### Workflows stop after running a while
-- **Cause**: Worker concurrency too high for VPS resources.  
+### Workflows stop after running for a while
+- **Cause**: Worker concurrency is too high for VPS resources.  
 - **Fix**:
   - Lower concurrency in `.env`:
     ```env
