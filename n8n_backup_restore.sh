@@ -459,6 +459,15 @@ do_local_backup() {
     fi
 
     log INFO "Starting backup at $DATE..."
+	log INFO "Backing up ./local-files directory..."
+	if [[ -d "$N8N_DIR/local-files" ]]; then
+	    tar -czf "$BACKUP_PATH/local-files_$DATE.tar.gz" -C "$N8N_DIR" local-files \
+	        || { log ERROR "Failed to backup local-files directory"; return 1; }
+	    log INFO "local-files directory backed up"
+	else
+	    log INFO "No local-files directory found, skipping..."
+	fi
+
 	log INFO "Backing up Docker volumes..."
     for vol in "${VOLUMES[@]}"; do
         if ! docker volume inspect "$vol" &>/dev/null; then
@@ -929,7 +938,16 @@ restore_n8n() {
     fi
     log INFO "N8N_ENCRYPTION_KEY (masked): $(mask_secret "$n8n_encryption_key")"
 
-	# Restore .env and docker-compose.yml
+	log INFO "Restoring local-files directory..."
+	if [[ -f "$restore_dir/local-files_"*".tar.gz" ]]; then
+	    tar -xzf "$restore_dir"/local-files_*.tar.gz -C "$N8N_DIR" \
+	        || { log ERROR "Failed to restore local-files"; return 1; }
+	    log INFO "local-files directory restored"
+	else
+	    log INFO "No local-files archive found, skipping..."
+	fi
+
+    # Restore .env and docker-compose.yml
  	cp -f "$backup_env_path" "$current_env_path"
   	log INFO "Restored $backup_env_path to $current_env_path"
   	cp -f "$backup_compose_path" "$current_compose_path"
