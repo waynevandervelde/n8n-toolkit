@@ -4,6 +4,8 @@ Automate the **install**, **upgrade**, **backup**, and **restore** of an [n8n](h
 This repository provides a **production-ready setup** for **self-hosting n8n** with **Docker Compose**, **Traefik** (for HTTPS & reverse proxy), and **PostgreSQL** (for reliable persistence).  
 Whether you’re a developer or a non-technical user, this setup makes it simple to run your own secure automation platform.
 
+Refer to my blog post: [[n8n](https://nextgrowth.ai/self-host-n8n-automation-ubuntu-docker/)](https://nextgrowth.ai/self-host-n8n-automation-ubuntu-docker/)
+
 ## Table of Contents
 
 - [Highlights](#highlights)  
