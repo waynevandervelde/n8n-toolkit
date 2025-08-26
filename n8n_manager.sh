@@ -432,7 +432,6 @@ install_docker() {
     rsync \
     tar \
     msmtp \
-    rclone \
     dnsutils \
     openssl
 
