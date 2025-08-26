@@ -78,7 +78,7 @@ If you already have `git` installed and are comfortable with it:
 
 ```bash
 git clone https://github.com/waynevandervelde/n8n-toolkit.git
-cd n8n
+cd n8n-toolkit
 chmod +x *.sh
 ```
 

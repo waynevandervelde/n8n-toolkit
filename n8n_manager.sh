@@ -200,7 +200,7 @@ list_available_versions() {
     # Make sure jq exists even if user calls -a before install
     if ! command -v jq >/dev/null 2>&1; then
         log INFO "jq not found; installing..."
-        apt-get update -y && apt-get install -y --no-install-recommends jq
+        yum update -y && yum install -y jq
     fi
 
     local current_version
@@ -419,32 +419,14 @@ install_docker() {
     if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
         log INFO "Docker already installed. Skipping Docker install."
     else
-        log INFO "Installing prerequisites (curl, ca-certificates, gpg, lsb-release)..."
-        apt-get update -y
-        apt-get install -y --no-install-recommends ca-certificates curl gnupg lsb-release
-
-        log INFO "Adding Docker GPG key (non-interactive)..."
-        mkdir -p /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
-            gpg --dearmor | tee /etc/apt/keyrings/docker.gpg > /dev/null
-    
-        chmod a+r /etc/apt/keyrings/docker.gpg
-
-        log INFO "Adding Docker repository..."
-        echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-        https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | \
-        tee /etc/apt/sources.list.d/docker.list > /dev/null
-        apt-get update -y
-
         log INFO "Installing Docker Engine and Docker Compose v2..."
-        if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
-            log WARN "APT install from Docker repo failed. Falling back to official convenience script..."
+        if ! yum install -y docker; then
+            log WARN "YUM install from Docker repo failed. Falling back to official convenience script..."
             curl -fsSL https://get.docker.com | sh
         fi
     fi
     log INFO "Installing required dependencies..."
-    apt-get install -y --no-install-recommends \
+    yum install -y \
     jq \
     vim \
     rsync \
@@ -553,7 +535,7 @@ upgrade_n8n() {
 
     # Make sure jq is available for tag lookups
     if ! command -v jq >/dev/null 2>&1; then
-        apt-get update -y && apt-get install -y --no-install-recommends jq
+        yum update -y && yum install -y jq
     fi
 
     local current_version target_version

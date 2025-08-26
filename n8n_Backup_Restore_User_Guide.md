@@ -54,11 +54,11 @@ Run the script from your n8n project folder (the one that contains your `docker-
 
 ## Requirements (one‑time)
 
-- **Install the tools the script needs (Ubuntu/Debian)**
+- **Install the tools the script needs (Amazon/RedHat)**
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y docker.io rsync tar msmtp-mta rclone dnsutils curl openssl
+sudo yum update
+sudo yum install -y docker.io rsync tar msmtp-mta rclone dnsutils curl openssl
 ```
 
 > `getopt` (from util‑linux) is usually already present on Ubuntu.\
