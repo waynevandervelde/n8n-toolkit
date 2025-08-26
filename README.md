@@ -77,7 +77,7 @@ You can set up this project in **two different ways**, depending on your experie
 If you already have `git` installed and are comfortable with it:
 
 ```bash
-git clone https://github.com/thenguyenvn90/n8n.git
+git clone https://github.com/waynevandervelde/n8n-toolkit.git
 cd n8n
 chmod +x *.sh
 ```
