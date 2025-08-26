@@ -431,9 +431,10 @@ install_docker() {
     vim \
     rsync \
     tar \
-    msmtp \
     dnsutils \
     openssl
+
+    
 
     # Make sure the daemon is running/enabled
     if command -v systemctl >/dev/null 2>&1; then
