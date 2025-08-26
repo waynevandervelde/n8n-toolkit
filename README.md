@@ -90,7 +90,7 @@ If you don’t use Git, you can just download the code directly:
 sudo apt install unzip -y
 
 # Download and extract
-curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip
+curl -L -o n8n.zip https://github.com/waynevandervelde/n8n-toolkit/archive/refs/heads/main.zip
 unzip n8n.zip
 cd n8n-main
 # Make scripts executable

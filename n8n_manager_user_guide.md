@@ -56,7 +56,7 @@ The **n8n Manager** script automates the entire lifecycle of your n8n deployment
 1. **Download the Script**
    ```bash
    apt install unzip
-   curl -L -o n8n.zip https://github.com/thenguyenvn90/n8n/archive/refs/heads/main.zip && unzip n8n.zip && cd n8n-main && chmod +x *.sh
+   curl -L -o n8n.zip https://github.com/waynevandervelde/n8n-toolkit/archive/refs/heads/main.zip && unzip n8n.zip && cd n8n-main && chmod +x *.sh
    ```
    Note: After unzipping, GitHub appends "-main" to the folder name n8n. In this case, it’s n8n-main.
 
