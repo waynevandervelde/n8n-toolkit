@@ -597,6 +597,6 @@ If you hit a snag:
 
 - Check the run log in `logs/`
 - Open an issue on your repo (if applicable)
-- Or email: [**thenguyen.ai.automation@gmail.com**](mailto\:thenguyen.ai.automation@gmail.com)
+- Or email: [**wayne.vandervelde@gmail.com**](mailto\:wayne.vandervelde@gmail.com)
 
 Happy automating!

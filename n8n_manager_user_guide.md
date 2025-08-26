@@ -270,4 +270,4 @@ sudo ./n8n_manager.sh -c
    docker logs -f n8n
    ```
 
-Thank you for using **n8n Manager**! If you encounter any issues, please open an issue on the GitHub repo or email [thenguyen.ai.automation@gmail.com](mailto\:thenguyen.ai.automation@gmail.com). 🎉
+Thank you for using **n8n Manager**! If you encounter any issues, please open an issue on the GitHub repo or email [wayne.vandervelde@gmail.com](mailto\:wayne.vandervelde@gmail.com). 🎉

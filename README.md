@@ -224,6 +224,6 @@ The `n8n_backup_restore.sh` script handles **backups and restores** of your n8n 
 ## Support
 
 - Open an issue in the repo, or  
-- Email **thenguyen.ai.automation@gmail.com**
+- Email **wayne.vandervelde@gmail.com**
 
 Happy automating!
