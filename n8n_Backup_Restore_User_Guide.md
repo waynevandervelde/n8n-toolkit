@@ -62,7 +62,7 @@ sudo yum install -y docker.io rsync tar msmtp-mta rclone dnsutils curl openssl
 ```
 
 > `getopt` (from util‑linux) is usually already present on Ubuntu.\
-> Docker must be running, and your n8n stack should be up via `docker compose`.
+> Docker must be running, and your n8n stack should be up via `docker-compose`.
 
 - **Check your `.env` file contains `N8N_ENCRYPTION_KEY`**  
   n8n uses an encryption key to protect stored credentials. This key is critical for **backup and restore**.  
@@ -370,7 +370,7 @@ PostgreSQL:           Restored from SQL dump
 
 What it does:
 
-- Stops current stack (`docker compose down --volumes --remove-orphans`)
+- Stops current stack (`docker-compose down --volumes --remove-orphans`)
 - Removes volumes `n8n-data`, `postgres-data`, `letsencrypt`
 - Restores volume archives and the saved `.env` / `docker-compose.yml` (if present)
 - Brings the stack back up
@@ -569,7 +569,7 @@ rclone delete --min-age 7d gdrive-user:n8n-backups
 **Q: “Restore failed / unhealthy containers.”**
 
 - Check `logs/restore_n8n_*.log`.
-- Run `docker compose ps` and `docker logs <container>` to see details.
+- Run `docker-compose ps` and `docker logs <container>` to see details.
 - Ensure your `.env` matches the restored DB name (see the note about `n8ndb`).
 
 **Q: “Email attachment looked weird before.”**

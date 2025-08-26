@@ -90,7 +90,7 @@ print_stacktrace() {
 #
 # Behaviors:
 #   - Logs interrupt location.
-#   - Runs `docker compose down` for current N8N_DIR if compose file exists.
+#   - Runs `docker-compose down` for current N8N_DIR if compose file exists.
 #   - Exits with code 130.
 #
 # Returns:
@@ -99,7 +99,7 @@ print_stacktrace() {
 on_interrupt() {
     log ERROR "Interrupted by user (SIGINT) at ${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}:${BASH_LINENO[0]:-0} in ${FUNCNAME[1]:-main}(). Stopping containers and exiting..."
     if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
-        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" down) || true
+        (cd "$N8N_DIR" && docker-compose -f "$N8N_DIR/docker-compose.yml" down) || true
     fi
     exit 130
 }
@@ -112,7 +112,7 @@ on_interrupt() {
 # Behaviors:
 #   - Logs failed command, file, line, and function.
 #   - Calls print_stacktrace().
-#   - Runs `docker compose ps` (if compose file present).
+#   - Runs `docker-compose ps` (if compose file present).
 #   - Exits with the original failing command’s exit code.
 #
 # Returns:
@@ -131,7 +131,7 @@ on_error() {
     print_stacktrace
 
     if [[ -n "${N8N_DIR:-}" && -f "$N8N_DIR/docker-compose.yml" ]]; then
-        (cd "$N8N_DIR" && docker compose -f "$N8N_DIR/docker-compose.yml" ps) || true
+        (cd "$N8N_DIR" && docker-compose -f "$N8N_DIR/docker-compose.yml" ps) || true
     fi
 
     exit "$exit_code"
@@ -378,21 +378,21 @@ parse_domain_arg() {
 ################################################################################
 # compose()
 # Description:
-#   Wrapper around `docker compose` that always supplies --env-file and -f.
+#   Wrapper around `docker-compose` that always supplies --env-file and -f.
 #
 # Behaviors:
 #   - Requires ENV_FILE and COMPOSE_FILE to be set.
-#   - Forwards all additional arguments to `docker compose`.
+#   - Forwards all additional arguments to `docker-compose`.
 #
 # Returns:
-#   Exit code from `docker compose`; 1 if ENV_FILE/COMPOSE_FILE unset.
+#   Exit code from `docker-compose`; 1 if ENV_FILE/COMPOSE_FILE unset.
 ################################################################################
 # Expect: ENV_FILE, COMPOSE_FILE set by caller scripts.
 compose() {
     if [[ -z "${COMPOSE_FILE:-}" || -z "${ENV_FILE:-}" ]]; then
         log ERROR "compose(): COMPOSE_FILE/ENV_FILE not set"; return 1
     fi
-    docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+    docker-compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
 }
 
 ################################################################################

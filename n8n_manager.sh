@@ -434,7 +434,7 @@ install_docker() {
     dnsutils \
     openssl
 
-    
+
 
     # Make sure the daemon is running/enabled
     if command -v systemctl >/dev/null 2>&1; then
@@ -601,7 +601,7 @@ cleanup_n8n() {
 
     log WARN "This will stop containers, remove the compose stack, and delete named resources."
     echo "Planned actions:"
-    echo "  - docker compose down --remove-orphans -v"
+    echo "  - docker-compose down --remove-orphans -v"
     echo "  - Remove external volumes: ${VLIST[*]}  (letsencrypt kept: ${KEEP_CERTS})"
     echo "  - Remove docker network: ${NETWORK_NAME}"
     echo "  - Remove dangling images (docker image prune -f)"
@@ -615,8 +615,8 @@ cleanup_n8n() {
     if [[ -f "$N8N_DIR/docker-compose.yml" ]]; then
         compose down --remove-orphans || true
     else
-        log WARN "docker-compose.yml not found at \$N8N_DIR; attempting plain 'docker compose down' in $PWD."
-        docker compose down --remove-orphans || true
+        log WARN "docker-compose.yml not found at \$N8N_DIR; attempting plain 'docker-compose down' in $PWD."
+        docker-compose down --remove-orphans || true
     fi
 
     log INFO "Removing related volumes..."

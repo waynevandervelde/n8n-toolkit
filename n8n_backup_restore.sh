@@ -959,7 +959,7 @@ restore_n8n() {
   	# Stop and remove the current containers before cleaning volumes
     log INFO "Stopping and removing containers before restore..."
 	compose down --volumes --remove-orphans \
-		|| { log ERROR "docker compose down failed"; return 1; }
+		|| { log ERROR "docker-compose down failed"; return 1; }
 
 	# Check if we have a SQL database
     local dump_file=""
@@ -1048,7 +1048,7 @@ restore_n8n() {
  
 	# When the PostgreSQL DB is ready, start other containers
 	log INFO "Starting the rest of the stack..."
-	compose up -d || { log ERROR "docker compose up failed"; return 1; }
+	compose up -d || { log ERROR "docker-compose up failed"; return 1; }
 
     log INFO "Checking services running and healthy after restoring backup..."
     if ! check_services_up_running; then

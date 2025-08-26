@@ -248,7 +248,7 @@ sudo ./n8n_manager.sh -c
 - **Main log file:** `/home/n8n/logs/n8n_manager.log`  
 - **Check container health:**
   ```bash
-  docker compose -f /home/n8n/docker-compose.yml ps
+  docker-compose -f /home/n8n/docker-compose.yml ps
   ```
 - **Browse UI:** Visit `https://n8n.YourDomain.com` in your web browser.
 
